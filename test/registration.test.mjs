@@ -11,9 +11,9 @@ test("public entry registers /cost without eager OMP runtime imports", () => {
   assert.equal(typeof commands.get("cost")?.handler, "function");
 });
 
-test("manifest points to the tabbed public entry", () => {
+test("manifest points to the styled public entry", () => {
   const pkg = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"));
-  assert.deepEqual(pkg.omp.extensions, ["./tabbed.js"]);
+  assert.deepEqual(pkg.omp.extensions, ["./styled.js"]);
 });
 
 test("flat core report is split into five priority-ordered tabs", () => {

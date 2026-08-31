@@ -1,6 +1,6 @@
 {
   "name": "omp-session-cost",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "An oh-my-pi /cost extension for current-session token and API-equivalent cost reporting across main agents, recursive subagents, and advisors.",
   "type": "module",
   "license": "MIT",
@@ -26,16 +26,17 @@
   "files": [
     "index.js",
     "tabbed.js",
+    "styled.js",
     "README.md",
     "LICENSE",
     "CHANGELOG.md"
   ],
   "scripts": {
-    "check": "node --check index.js && node --check tabbed.js && node --test"
+    "check": "node --check index.js && node --check tabbed.js && node --check styled.js && node --test"
   },
   "omp": {
     "extensions": [
-      "./tabbed.js"
+      "./styled.js"
     ]
   }
 }

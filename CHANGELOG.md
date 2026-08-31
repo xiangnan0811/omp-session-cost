@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.0] - 2026-08-31
+
+Visual-design release.
+
+### Added
+
+- OMP theme-aware colors and typography using the theme object supplied to custom UI extensions.
+- Stable model color identities shared across Models, Agents, and Agent × Model.
+- Cost-share bars for fast visual comparison.
+- Dominant-model badges on the Agents tab.
+- Agent-grouped model hierarchy on Agent × Model, sorted by cost within each agent.
+- Theme-aware borders, headings, metrics, warnings, paths, and footer text.
+- ANSI-aware truncation so styled content remains aligned inside the overlay.
+- Monochrome-safe structural markers (`▸`, `◆`, `●`, and tree branches).
+
+### Changed
+
+- Replaced the flat `agent @ model` list with an explicit agent → model hierarchy.
+- Active tab emphasis now follows the current OMP accent theme.
+
 ## [0.3.0] - 2026-08-31
 
 Tabbed TUI navigation for faster session-cost exploration.

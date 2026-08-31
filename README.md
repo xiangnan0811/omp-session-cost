@@ -12,6 +12,9 @@ It is built for multi-agent OMP workflows where the main status line tells only 
 - API-equivalent cost breakdown
 - Grouping by agent type, model, agent, and agent × model
 - Five-tab TUI: Overview, Models, Agents, Agent × Model, and Details
+- Theme-aware colors and typography that follow the active OMP theme
+- Stable model color identities across Models, Agents, and Agent × Model
+- Dominant-model badges and agent-grouped model hierarchy
 - Tab / Shift+Tab / Left / Right navigation with per-tab scroll-position memory
 - Fork-aware filtering and duplicate suppression
 - TUI overlay with no report text injected into LLM context
@@ -57,7 +60,7 @@ To force OMP's official stats pipeline to refresh before pricing enrichment:
 
 ```text
 SESSION COST  main + recursive subagents + advisors
-[Overview]   Models   Agents   Agent x Model   Details
+▸ Overview   Models   Agents   Agent × Model   Details
 
 SUMMARY
 Requests                     2107
@@ -77,8 +80,8 @@ The tabs are ordered by day-to-day usefulness:
 
 1. **Overview** — request totals, token usage, cost components, and agent-type split.
 2. **Models** — per-provider/model token and cost breakdown.
-3. **Agents** — per-agent breakdown across the complete recursive agent tree.
-4. **Agent × Model** — the most granular attribution view.
+3. **Agents** — per-agent breakdown plus the dominant model for each agent, ranked by API-equivalent cost.
+4. **Agent × Model** — agent-grouped model attribution, sorted by cost within each agent.
 5. **Details** — session/root paths, files scanned, fork/dedup information, `stats.db`, sync state, and pricing sources.
 
 The exact values depend on your models, providers, session tree, and OMP pricing catalog.
@@ -126,7 +129,7 @@ This keeps extension loading independent from OMP's native addons while still re
 
 A previous local prototype imported OMP stats/catalog/TUI packages at extension module load time. On some packaged Linux builds, that dependency chain eagerly loaded `pi_natives` and prevented the extension from registering.
 
-The public entry imports only the local report core, and that core imports Node built-ins only. No `@oh-my-pi/*` runtime package is imported during extension loading. OMP APIs are received through the extension factory, and Bun SQLite is loaded lazily only when `/cost` needs `stats.db` pricing data.
+The public entry imports only local extension modules, while the report core imports Node built-ins only. No `@oh-my-pi/*` runtime package is imported during extension loading. OMP APIs are received through the extension factory, and Bun SQLite is loaded lazily only when `/cost` needs `stats.db` pricing data.
 
 ## Controls
 
@@ -145,11 +148,19 @@ q / Esc            close
 
 Each tab remembers its own scroll position while the report is open, so switching views does not lose your place.
 
+## Visual design
+
+The report uses the theme object supplied by OMP's custom-UI API rather than hard-coded ANSI colors. This means borders, accents, warnings, muted text, model badges, and headings follow the user's current OMP theme.
+
+Model colors are assigned consistently within a report. The same model keeps the same visual identity in **Models**, **Agents**, and **Agent × Model**. The **Agents** tab shows each agent's dominant model by API-equivalent cost, while **Agent × Model** groups models under their agent and sorts them by cost within that agent.
+
+The hierarchy remains readable when colors are disabled: active tabs stay bracketed, models use `●`, agents use `◆`, and agent/model relationships use tree branches.
+
 ## Troubleshooting
 
 ### `/cost` is missing
 
-Check that the manifest points to the tabbed public entry:
+Check that the manifest points to the styled public entry:
 
 ```bash
 cat ~/.omp/plugins/node_modules/omp-session-cost/package.json
@@ -166,7 +177,7 @@ The manifest should contain:
 ```json
 {
   "omp": {
-    "extensions": ["./tabbed.js"]
+    "extensions": ["./styled.js"]
   }
 }
 ```
