@@ -11,8 +11,10 @@ It is built for multi-agent OMP workflows where the main status line tells only 
 - Orchestration-token accounting when present in OMP transcripts
 - API-equivalent cost breakdown
 - Grouping by agent type, model, agent, and agent × model
+- Five-tab TUI: Overview, Models, Agents, Agent × Model, and Details
+- Tab / Shift+Tab / Left / Right navigation with per-tab scroll-position memory
 - Fork-aware filtering and duplicate suppression
-- Scrollable TUI overlay, with no report text injected into LLM context
+- TUI overlay with no report text injected into LLM context
 - Native-safe extension loading: no eager `@oh-my-pi/*` runtime imports
 - Zero third-party package dependencies
 
@@ -43,7 +45,7 @@ Run inside a persisted OMP session:
 /cost
 ```
 
-`/cost` reads the current root session transcript plus its recursive agent-artifact tree and renders a scrollable report.
+`/cost` reads the current root session transcript plus its recursive agent-artifact tree and opens a tabbed TUI report. The default **Overview** keeps the high-value totals on one screen, while detailed breakdowns live in focused tabs.
 
 To force OMP's official stats pipeline to refresh before pricing enrichment:
 
@@ -51,12 +53,15 @@ To force OMP's official stats pipeline to refresh before pricing enrichment:
 /cost refresh
 ```
 
-### Example report
+### TUI layout
 
 ```text
 SESSION COST  main + recursive subagents + advisors
+[Overview]   Models   Agents   Agent x Model   Details
 
 SUMMARY
+Requests                     2107
+Failed requests                  0
 Measured tokens            285.5M
 API-equivalent cost        $108.20
 Input                        6.83M
@@ -66,13 +71,15 @@ Cache read                  278.0M
 BY AGENT TYPE
 subagent   1989 req   270.1M tok   94.6%   $97.16   89.8%
 main        118 req    15.4M tok    5.4%   $11.03   10.2%
-
-BY MODEL
-xai-oauth/grok-4.6
-  395 req   77.9M tok   27.3%   $73.16   67.6%
-openai-codex/gpt-5.6-sol
-  329 req   39.5M tok   13.8%   $27.79   25.7%
 ```
+
+The tabs are ordered by day-to-day usefulness:
+
+1. **Overview** — request totals, token usage, cost components, and agent-type split.
+2. **Models** — per-provider/model token and cost breakdown.
+3. **Agents** — per-agent breakdown across the complete recursive agent tree.
+4. **Agent × Model** — the most granular attribution view.
+5. **Details** — session/root paths, files scanned, fork/dedup information, `stats.db`, sync state, and pricing sources.
 
 The exact values depend on your models, providers, session tree, and OMP pricing catalog.
 
@@ -119,25 +126,30 @@ This keeps extension loading independent from OMP's native addons while still re
 
 A previous local prototype imported OMP stats/catalog/TUI packages at extension module load time. On some packaged Linux builds, that dependency chain eagerly loaded `pi_natives` and prevented the extension from registering.
 
-The public version intentionally imports only Node built-ins at module load. OMP APIs are received through the extension factory, and Bun SQLite is loaded lazily only when `/cost` needs `stats.db` pricing data.
+The public entry imports only the local report core, and that core imports Node built-ins only. No `@oh-my-pi/*` runtime package is imported during extension loading. OMP APIs are received through the extension factory, and Bun SQLite is loaded lazily only when `/cost` needs `stats.db` pricing data.
 
 ## Controls
 
 Inside the report overlay:
 
 ```text
-Up / Down       scroll one line
-j / k           scroll one line
-PgUp / PgDn     scroll one page
-Home / End      jump to top / bottom
-q / Esc         close
+Tab / Right        next tab
+Shift+Tab / Left   previous tab
+1 .. 5             jump directly to a tab
+Up / Down          scroll one line within the active tab
+j / k              scroll one line within the active tab
+PgUp / PgDn        scroll one page
+Home / End         jump to top / bottom of the active tab
+q / Esc            close
 ```
+
+Each tab remembers its own scroll position while the report is open, so switching views does not lose your place.
 
 ## Troubleshooting
 
 ### `/cost` is missing
 
-Check that the manifest points to `index.js`:
+Check that the manifest points to the tabbed public entry:
 
 ```bash
 cat ~/.omp/plugins/node_modules/omp-session-cost/package.json
@@ -154,7 +166,7 @@ The manifest should contain:
 ```json
 {
   "omp": {
-    "extensions": ["./index.js"]
+    "extensions": ["./tabbed.js"]
   }
 }
 ```

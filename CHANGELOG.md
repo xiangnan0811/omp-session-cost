@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.0] - 2026-08-31
+
+Tabbed TUI navigation for faster session-cost exploration.
+
+### Added
+
+- Five report tabs: Overview, Models, Agents, Agent × Model, and Details.
+- Tab switching with `Tab`, `Shift+Tab`, Left/Right arrows, or number keys `1`-`5`.
+- Independent scroll position for every tab.
+- Dedicated Details tab for low-priority session/root paths, files scanned, fork/dedup metadata, `stats.db`, sync state, and pricing-source information.
+- Tests for tab organization, keyboard navigation, and per-tab scroll-state preservation.
+
+### Changed
+
+- `/cost` now opens on a compact Overview instead of one long vertically stacked report.
+- Model, agent, and agent × model breakdowns are isolated into focused views, substantially reducing routine scrolling.
+- Public extension entry moved to `tabbed.js`; the existing `index.js` remains the native-safe report core.
+
 ## [0.2.0] - 2026-08-31
 
 First public release.
