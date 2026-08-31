@@ -1,0 +1,40 @@
+{
+  "name": "omp-session-cost",
+  "version": "0.2.0",
+  "description": "An oh-my-pi /cost extension for current-session token and API-equivalent cost reporting across main agents, recursive subagents, and advisors.",
+  "type": "module",
+  "license": "MIT",
+  "author": "xiangnan0811",
+  "homepage": "https://github.com/xiangnan0811/omp-session-cost#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xiangnan0811/omp-session-cost.git"
+  },
+  "bugs": {
+    "url": "https://github.com/xiangnan0811/omp-session-cost/issues"
+  },
+  "keywords": [
+    "oh-my-pi",
+    "omp",
+    "extension",
+    "tokens",
+    "cost",
+    "subagent",
+    "observability",
+    "llm"
+  ],
+  "files": [
+    "index.js",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "check": "node --check index.js && node --test"
+  },
+  "omp": {
+    "extensions": [
+      "./index.js"
+    ]
+  }
+}
