@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import tabbedCostExtension, { splitReportLines, TabbedCostReportView } from "../tabbed.js";
 
-test("public entry registers /cost without eager OMP runtime imports", () => {
+test("tabbed entry registers /cost without eager OMP runtime imports", () => {
   const commands = new Map();
   const pi = { registerCommand(name, spec) { commands.set(name, spec); } };
   tabbedCostExtension(pi);

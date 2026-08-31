@@ -60,7 +60,7 @@ To force OMP's official stats pipeline to refresh before pricing enrichment:
 
 ```text
 SESSION COST  main + recursive subagents + advisors
-▸ Overview   Models   Agents   Agent × Model   Details
+[Overview]   Models   Agents   Agent × Model   Details
 
 SUMMARY
 Requests                     2107
