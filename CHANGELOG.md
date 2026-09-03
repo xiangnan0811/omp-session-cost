@@ -2,6 +2,26 @@
 
 All notable changes to this project are documented here.
 
+## [0.5.2] - 2026-09-03
+
+TUI layout, contrast, and keyboard hotfix for OMP 18.1.5.
+
+### Fixed
+
+- Anchor the explorer at the bottom of the terminal and cap it at 52% of terminal height instead of occupying the full screen.
+- Stop padding short views with a full page of blank rows; short Overview and modal views now use only the height they need.
+- Resolve selected-row foreground through `fgOnBg` before applying `selectedBg`, preventing white-on-light selection rows.
+- Recognize OMP/Kitty keyboard sequences through the runtime `matchesKey` helper, with legacy and CSI-u fallbacks.
+- Make Escape close Help and Copy panels reliably before affecting the underlying explorer.
+- Replace the distant, truncated row suffix with explicit `CALLS`, `TOKENS`, `COST`, active-share, and `DISTRIBUTION` columns on wide terminals.
+- Add responsive active-metric columns on medium and narrow terminals.
+- Include terminal height in the render cache key so resizing updates the viewport immediately.
+- Compact Help and Copy content so their controls remain visible inside the lower-half panel.
+
+### Tests
+
+- Added lower-half overlay contract, selected-row contrast, Kitty Escape, responsive column-transition, metric-header, and terminal-height cache coverage.
+
 ## [0.5.1] - 2026-09-03
 
 OMP 18 session-format compatibility hotfix.

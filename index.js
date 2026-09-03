@@ -5,6 +5,27 @@ import { CostExplorerView } from "./view.js";
 
 const COMMAND = "cost";
 
+export const COST_OVERLAY_OPTIONS = Object.freeze({
+  overlay: true,
+  overlayOptions: Object.freeze({
+    anchor: "bottom-center",
+    width: "100%",
+    maxHeight: "52%",
+    margin: 0,
+  }),
+});
+
+let keyMatcherPromise;
+
+async function loadKeyMatcher() {
+  if (!keyMatcherPromise) {
+    keyMatcherPromise = import("@oh-my-pi/pi-tui")
+      .then(module => typeof module.matchesKey === "function" ? module.matchesKey : null)
+      .catch(() => null);
+  }
+  return keyMatcherPromise;
+}
+
 function compactSummary(report) {
   return `${formatInt(report.total.calls)} LLM calls | ${formatTokens(report.total.measuredTokens)} measured tokens | ${formatCost(report.total.costTotal)} API-equivalent`;
 }
@@ -33,8 +54,10 @@ export default function costExplorerExtension(pi) {
           return;
         }
 
+        const matchesKey = await loadKeyMatcher();
         await ctx.ui.custom(
           (tui, theme, keybindings, done) => new CostExplorerView(tui, theme, keybindings, report, {
+            matchesKey,
             onRefresh: async () => {
               report = await buildReport(sessionFile, pi, ctx, true);
               return report;
@@ -46,7 +69,7 @@ export default function costExplorerExtension(pi) {
               return { message: `Copied via ${result.method}` };
             },
           }, done),
-          { overlay: true },
+          COST_OVERLAY_OPTIONS,
         );
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

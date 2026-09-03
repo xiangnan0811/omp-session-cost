@@ -6,14 +6,17 @@ It scans the persisted root session plus recursive subagent and advisor transcri
 
 ## v0.5 highlights
 
+- Bottom-anchored explorer capped at 52% of terminal height, leaving the active conversation visible above it.
 - Six views: **Overview**, **Providers**, **Models**, **Agents**, **Advisors**, and **Details**.
 - Keyboard selection and expandable drill-down instead of one static report.
 - Provider → model → agent and model → agent attribution.
 - Agent → model attribution with Main/Subagent grouping.
 - Dedicated advisor analysis with owner/scope, review updates, calls per review, model mix, advise calls, delivered notes/cards, severity counts, tool activity, and direct primary follow-up calls.
 - Explicit `CALL%`, `TOK%`, and `COST%` headings in Overview.
+- Wide lists use explicit `CALLS`, `TOKENS`, `COST`, active-share, and `DISTRIBUTION` columns; medium and narrow layouts retain a labeled active metric.
 - Metric mode: **Cost**, **Tokens**, or **Calls**.
 - Sort mode: current metric or name.
+- OMP/Kitty-aware key handling, including reliable Escape behavior in Help and Copy panels.
 - One-key copy menu for an AI analysis brief, current selection, current tab, full Markdown, or full JSON.
 - Clipboard exports omit transcript text and absolute local paths.
 - `.jsonl` and `.jsonl.gz` transcript support.
@@ -57,6 +60,15 @@ Main            324    10.7%     45.5M    12.9%    $24.67    21.7%
 
 Providers expand into models; models expand into agents. Percentages on child rows use the visible parent as denominator.
 
+On wide terminals, every list row uses the same explicit columns:
+
+```text
+NAME                         CALLS      TOKENS       COST    COST%  DISTRIBUTION
+openai-codex                 1,765      190.0M     $28.61    55.4%  ━━━━━━━━━━━──
+```
+
+The percentage column follows the active metric, so it becomes `TOK%` or `CALL%` after pressing `m`.
+
 ### Agents
 
 Main and task subagents are grouped separately. Expand an agent to inspect its model mix.
@@ -85,15 +97,15 @@ Tab / Shift+Tab      switch views
 Up / Down, j / k     move selection
 PgUp / PgDn          move by a page
 Home / End           first / last item
-Enter / Right          expand
-Left / Esc             collapse or return to parent
-m                      Cost → Tokens → Calls
-s                      sort by current metric / name
-c                     copy menu
-r                     rebuild and refresh official stats
-? / h                  help
-q                      close
-Esc                    collapse, then close
+Enter / Right        expand
+Left / Esc           collapse or return to parent
+m                    Cost → Tokens → Calls
+s                    sort by current metric / name
+c                    copy menu
+r                    rebuild and refresh official stats
+? / h                help
+q                    close
+Esc                  close Help/Copy first; otherwise collapse, then close
 ```
 
 Every view remembers its own selection, scroll position, and expanded rows while the explorer is open. Refresh preserves this state where possible.

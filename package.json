@@ -1,6 +1,6 @@
 {
   "name": "omp-session-cost",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "An interactive oh-my-pi session cost explorer for providers, models, agents, and advisors.",
   "type": "module",
   "license": "MIT",
