@@ -7,6 +7,7 @@ import { finite } from "./format.js";
 
 export const ADVISOR_PREFIX = "__advisor";
 export const TRANSCRIPT_RE = /\.jsonl(?:\.gz)?$/i;
+export const TITLE_SLOT_ENTRY_TYPE = "title";
 const ZERO_COST = Object.freeze({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 });
 
 export function parseTime(value) {
@@ -105,19 +106,40 @@ export async function visitTranscript(file, visitor) {
   }
 }
 
+function overlayTitleSlot(header, titleSlot) {
+  if (!titleSlot) return header;
+  const result = { ...header };
+  if (typeof titleSlot.title === "string") result.title = titleSlot.title;
+  if (titleSlot.source === "auto" || titleSlot.source === "user") result.titleSource = titleSlot.source;
+  return result;
+}
+
 export async function readHeader(file) {
   const stream = inputStream(file);
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+  let titleSlot = null;
   try {
     for await (const line of rl) {
       const trimmed = line.trim();
       if (!trimmed || trimmed[0] !== "{") continue;
+      let entry;
       try {
-        const entry = JSON.parse(trimmed);
-        return entry && typeof entry === "object" && entry.type === "session" ? entry : null;
+        entry = JSON.parse(trimmed);
       } catch {
         continue;
       }
+      if (!entry || typeof entry !== "object") continue;
+
+      // OMP 18 session files physically start with a fixed-width `type: "title"`
+      // slot before the logical `type: "session"` header. Legacy files start
+      // directly with the session header. Only this one physical prefix record
+      // may precede the logical header; any other first object is malformed.
+      if (entry.type === TITLE_SLOT_ENTRY_TYPE && titleSlot === null) {
+        titleSlot = entry;
+        continue;
+      }
+      if (entry.type === "session") return overlayTitleSlot(entry, titleSlot);
+      return null;
     }
     return null;
   } finally {
@@ -204,4 +226,3 @@ export function severityKey(value) {
   const normalized = String(value ?? "").toLowerCase();
   return normalized === "nit" || normalized === "concern" || normalized === "blocker" ? normalized : "unspecified";
 }
-
