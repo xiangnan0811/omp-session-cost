@@ -93,7 +93,7 @@ test("buildReport aggregates providers, models, primary agents, and advisors", a
   const fixture = await richFixture();
   try {
     const report = await buildReport(fixture.root, pi, ctx);
-    assert.equal(report.version, "0.5.0");
+    assert.equal(report.version, "0.5.1");
     assert.equal(report.total.calls, 7);
     assert.equal(report.providers.length, 2);
     assert.equal(report.models.length, 4);

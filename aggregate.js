@@ -227,7 +227,7 @@ export function buildAggregates(scan) {
   const primaryAgents = agents.filter(row => row.agentType !== "advisor");
 
   return {
-    version: "0.5.0",
+    version: "0.5.1",
     generatedAt: Date.now(),
     sessionId: scan.sessionId,
     rootSessionFile: scan.rootSessionFile,

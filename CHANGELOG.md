@@ -2,6 +2,22 @@
 
 All notable changes to this project are documented here.
 
+## [0.5.1] - 2026-09-03
+
+OMP 18 session-format compatibility hotfix.
+
+### Fixed
+
+- Accept current OMP session files that physically begin with the fixed-width `type: "title"` slot before the logical `type: "session"` header.
+- Fold the title slot's current title and title source into the parsed session header, matching OMP's logical session view.
+- Preserve support for legacy transcripts that begin directly with the session header.
+- Apply the same compatibility handling to root sessions, recursive subagent/advisor transcripts, and `.jsonl.gz` files.
+
+### Tests
+
+- Added exact 256-byte title-slot fixtures modeled on OMP 18.1.5.
+- Added root, recursive transcript, gzip, legacy-format, and malformed-prefix coverage.
+
 ## [0.5.0] - 2026-09-03
 
 Interactive cost-explorer release.

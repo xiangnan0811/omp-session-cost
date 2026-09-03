@@ -11,9 +11,9 @@ test("public entry registers /cost", () => {
   assert.equal(typeof commands.get("cost")?.handler, "function");
 });
 
-test("manifest publishes v0.5.0 and points to structured explorer entry", () => {
+test("manifest publishes v0.5.1 and points to structured explorer entry", () => {
   const pkg = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"));
-  assert.equal(pkg.version, "0.5.0");
+  assert.equal(pkg.version, "0.5.1");
   assert.deepEqual(pkg.omp.extensions, ["./index.js"]);
   for (const file of ["core.js", "aggregate.js", "format.js", "export.js", "view.js"]) assert.ok(pkg.files.includes(file));
 });
