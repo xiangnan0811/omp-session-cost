@@ -1,7 +1,7 @@
 {
   "name": "omp-session-cost",
-  "version": "0.4.0",
-  "description": "An oh-my-pi /cost extension for current-session token and API-equivalent cost reporting across main agents, recursive subagents, and advisors.",
+  "version": "0.5.0",
+  "description": "An interactive oh-my-pi session cost explorer for providers, models, agents, and advisors.",
   "type": "module",
   "license": "MIT",
   "author": "xiangnan0811",
@@ -20,11 +20,22 @@
     "tokens",
     "cost",
     "subagent",
+    "advisor",
     "observability",
-    "llm"
+    "llm",
+    "tui"
   ],
   "files": [
     "index.js",
+    "core.js",
+    "transcript.js",
+    "pricing.js",
+    "aggregate.js",
+    "format.js",
+    "export.js",
+    "view-pages.js",
+    "view-render.js",
+    "view.js",
     "tabbed.js",
     "styled.js",
     "README.md",
@@ -32,11 +43,15 @@
     "CHANGELOG.md"
   ],
   "scripts": {
-    "check": "node --check index.js && node --check tabbed.js && node --check styled.js && node --test"
+    "check": "node --check index.js && node --check core.js && node --check transcript.js && node --check pricing.js && node --check aggregate.js && node --check format.js && node --check export.js && node --check view-pages.js && node --check view-render.js && node --check view.js && node --check tabbed.js && node --check styled.js && node --test test/*.test.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=22"
   },
   "omp": {
     "extensions": [
-      "./styled.js"
+      "./index.js"
     ]
   }
 }

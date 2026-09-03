@@ -1,83 +1,87 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import tabbedCostExtension, { splitReportLines, TabbedCostReportView } from "../tabbed.js";
+import path from "node:path";
+import costExtension from "../index.js";
+import { assistant, header, removeDir, tempDir, writeJsonl } from "./helpers.mjs";
 
-test("tabbed entry registers /cost without eager OMP runtime imports", () => {
+test("public entry registers /cost", () => {
   const commands = new Map();
-  const pi = { registerCommand(name, spec) { commands.set(name, spec); } };
-  tabbedCostExtension(pi);
-  assert.equal(commands.has("cost"), true);
+  costExtension({ registerCommand(name, spec) { commands.set(name, spec); } });
   assert.equal(typeof commands.get("cost")?.handler, "function");
 });
 
-test("manifest points to the styled public entry", () => {
+test("manifest publishes v0.5.0 and points to structured explorer entry", () => {
   const pkg = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"));
-  assert.deepEqual(pkg.omp.extensions, ["./styled.js"]);
+  assert.equal(pkg.version, "0.5.0");
+  assert.deepEqual(pkg.omp.extensions, ["./index.js"]);
+  for (const file of ["core.js", "aggregate.js", "format.js", "export.js", "view.js"]) assert.ok(pkg.files.includes(file));
 });
 
-test("flat core report is split into five priority-ordered tabs", () => {
-  const lines = [
-    "Session: session-123", "Root:    /tmp/session-123.jsonl", "Files:   4   Requests: 12   Failed: 1", "",
-    "SUMMARY", "-------", "Measured tokens          10.0M", "API-equivalent cost       $4.20", "",
-    "COST BREAKDOWN", "--------------", "Input                     $1.00", "",
-    "BY AGENT TYPE", "-------------", "subagent ...", "",
-    "BY MODEL", "--------", "openai/model", "  10 req ...", "",
-    "BY AGENT", "--------", "reviewer", "  8 req ...", "",
-    "AGENT x MODEL", "-------------", "reviewer @ openai/model", "  8 req ...", "",
-    "PRICING SOURCE", "--------------", "stats.db       12 request(s)", "stats.db: /tmp/stats.db",
-  ];
-  const tabs = splitReportLines(lines);
-  assert.deepEqual(tabs.map(tab => tab.label), ["Overview", "Models", "Agents", "Agent x Model", "Details"]);
-  assert.match(tabs[0].lines.join("\n"), /Requests\s+12/);
-  assert.match(tabs[0].lines.join("\n"), /BY AGENT TYPE/);
-  assert.doesNotMatch(tabs[0].lines.join("\n"), /session-123|stats\.db/);
-  assert.match(tabs[1].lines.join("\n"), /openai\/model/);
-  assert.match(tabs[2].lines.join("\n"), /reviewer/);
-  assert.match(tabs[3].lines.join("\n"), /reviewer @ openai\/model/);
-  assert.match(tabs[4].lines.join("\n"), /session-123/);
-  assert.match(tabs[4].lines.join("\n"), /\/tmp\/stats\.db/);
+test("compatibility entries still register the command", async () => {
+  for (const file of ["../tabbed.js", "../styled.js"]) {
+    const module = await import(file);
+    const commands = new Map();
+    module.default({ registerCommand(name, spec) { commands.set(name, spec); } });
+    assert.equal(typeof commands.get("cost")?.handler, "function");
+  }
 });
 
-test("Tab, Shift+Tab, and arrow keys switch tabs", () => {
-  let renders = 0;
-  const tui = { terminal: { rows: 30 }, requestRender() { renders += 1; } };
-  const keybindings = { matches: () => false };
-  const tabs = [
-    { label: "Overview", shortLabel: "Overview", lines: ["summary"] },
-    { label: "Models", shortLabel: "Models", lines: ["models"] },
-    { label: "Agents", shortLabel: "Agents", lines: ["agents"] },
-    { label: "Agent x Model", shortLabel: "A×M", lines: ["pairs"] },
-    { label: "Details", shortLabel: "Details", lines: ["details"] },
-  ];
-  const view = new TabbedCostReportView(tui, keybindings, tabs, () => {});
-  assert.match(view.render(100).join("\n"), /\[Overview\]/);
-  view.handleInput("\t");
-  assert.match(view.render(100).join("\n"), /\[Models\]/);
-  view.handleInput("\u001b[C");
-  assert.match(view.render(100).join("\n"), /\[Agents\]/);
-  view.handleInput("\u001b[Z");
-  assert.match(view.render(100).join("\n"), /\[Models\]/);
-  view.handleInput("\u001b[D");
-  assert.match(view.render(100).join("\n"), /\[Overview\]/);
-  assert.ok(renders >= 4);
+test("command builds an interactive overlay from a persisted session", async () => {
+  const dir = await tempDir();
+  const session = path.join(dir, "main.jsonl");
+  try {
+    await writeJsonl(session, [header("main"), assistant("a", "openai", "model")]);
+    const commands = new Map();
+    costExtension({ registerCommand(name, spec) { commands.set(name, spec); }, exec: async () => ({ code: 0 }) });
+    let rendered = "";
+    const notifications = [];
+    await commands.get("cost").handler("", {
+      waitForIdle: async () => {},
+      cwd: dir,
+      hasUI: true,
+      sessionManager: { getSessionFile: () => session },
+      ui: {
+        setStatus() {},
+        notify(message, type) { notifications.push({ message, type }); },
+        async custom(factory, options) {
+          assert.deepEqual(options, { overlay: true });
+          const instance = factory(
+            { terminal: { rows: 30 }, requestRender() {} },
+            { fg: (_color, text) => String(text), bold: text => String(text), bgFill: (_color, text) => String(text) },
+            { matches: () => false },
+            () => {},
+          );
+          rendered = instance.render(100).join("\n");
+        },
+      },
+    });
+    assert.match(rendered, /SESSION COST EXPLORER/);
+    assert.match(rendered, /Overview/);
+    assert.equal(notifications.filter(row => row.type === "error").length, 0);
+  } finally {
+    await removeDir(dir);
+  }
 });
 
-test("every tab preserves its own scroll position", () => {
-  const tui = { terminal: { rows: 18 }, requestRender() {} };
-  const keybindings = { matches: () => false };
-  const longLines = Array.from({ length: 40 }, (_, i) => `row-${i}`);
-  const view = new TabbedCostReportView(tui, keybindings, [
-    { label: "Overview", shortLabel: "Overview", lines: longLines },
-    { label: "Models", shortLabel: "Models", lines: longLines },
-  ], () => {});
-  view.handleInput("\u001b[B");
-  view.handleInput("\u001b[B");
-  assert.equal(view.currentOffset(), 2);
-  view.handleInput("\t");
-  assert.equal(view.currentOffset(), 0);
-  view.handleInput("\u001b[B");
-  assert.equal(view.currentOffset(), 1);
-  view.handleInput("\u001b[Z");
-  assert.equal(view.currentOffset(), 2);
+test("headless command reports a compact summary", async () => {
+  const dir = await tempDir();
+  const session = path.join(dir, "main.jsonl");
+  try {
+    await writeJsonl(session, [header("main"), assistant("a", "openai", "model")]);
+    const commands = new Map();
+    costExtension({ registerCommand(name, spec) { commands.set(name, spec); }, exec: async () => ({ code: 0 }) });
+    const notifications = [];
+    await commands.get("cost").handler("", {
+      waitForIdle: async () => {},
+      cwd: dir,
+      hasUI: false,
+      sessionManager: { getSessionFile: () => session },
+      ui: { setStatus() {}, notify(message, type) { notifications.push({ message, type }); } },
+    });
+    assert.match(notifications[0].message, /1 LLM calls/);
+    assert.match(notifications[0].message, /API-equivalent/);
+  } finally {
+    await removeDir(dir);
+  }
 });

@@ -1,61 +1,46 @@
 # Changelog
 
-All notable changes to this project will be documented in this file.
+All notable changes to this project are documented here.
 
-## [0.4.0] - 2026-08-31
+## [0.5.0] - 2026-09-03
 
-Visual-design release.
+Interactive cost-explorer release.
 
 ### Added
 
-- OMP theme-aware colors and typography using the theme object supplied to custom UI extensions.
-- Stable model color identities shared across Models, Agents, and Agent × Model.
-- Cost-share bars for fast visual comparison.
-- Dominant-model badges on the Agents tab.
-- Agent-grouped model hierarchy on Agent × Model, sorted by cost within each agent.
-- Theme-aware borders, headings, metrics, warnings, paths, and footer text.
-- ANSI-aware truncation so styled content remains aligned inside the overlay.
-- Monochrome-safe structural markers (`▸`, `◆`, `●`, and tree branches).
+- Six-view TUI: Overview, Providers, Models, Agents, Advisors, and Details.
+- Row focus, selection highlighting, expandable drill-down, parent navigation, and per-view state memory.
+- Provider → model → agent, model → agent, and agent → model attribution.
+- Cost/Tokens/Calls metric switching and current-metric/name sorting.
+- Explicit `CALL%`, `TOK%`, and `COST%` headings in Overview.
+- Dedicated advisor ownership and behavior analytics: main/subagent scope, review updates, calls/tokens/cost per review, advise calls, severity, delivered notes/cards, direct primary follow-ups, tools, failures, model mix, and cost intensity.
+- Copy menu for AI analysis brief, current selection, current view, full Markdown, and full JSON.
+- Privacy-safe aggregate exports that omit transcript text and absolute local paths.
+- `.jsonl.gz` transcript support and validation of transcript headers.
+- Invalid transcript-shaped file counts in Details and exports.
+- Responsive layouts for narrow and wide terminals.
 
 ### Changed
 
-- Replaced the flat `agent @ model` list with an explicit agent → model hierarchy.
-- Active tab emphasis now follows the current OMP accent theme.
-
-## [0.3.0] - 2026-08-31
-
-Tabbed TUI navigation for faster session-cost exploration.
-
-### Added
-
-- Five report tabs: Overview, Models, Agents, Agent × Model, and Details.
-- Tab switching with `Tab`, `Shift+Tab`, Left/Right arrows, or number keys `1`-`5`.
-- Independent scroll position for every tab.
-- Dedicated Details tab for low-priority session/root paths, files scanned, fork/dedup metadata, `stats.db`, sync state, and pricing-source information.
-- Tests for tab organization, keyboard navigation, and per-tab scroll-state preservation.
-
-### Changed
-
-- `/cost` now opens on a compact Overview instead of one long vertically stacked report.
-- Model, agent, and agent × model breakdowns are isolated into focused views, substantially reducing routine scrolling.
-- Public extension entry moved to `tabbed.js`; the existing `index.js` remains the native-safe report core.
-
-## [0.2.0] - 2026-08-31
-
-First public release.
-
-### Added
-
-- `/cost` session report with main-agent, recursive subagent, and advisor usage.
-- Token breakdown for input, output, cache read, cache write, and orchestration usage.
-- API-equivalent cost totals and cost-component breakdowns.
-- Grouping by agent type, model, agent, and agent × model.
-- Recursive JSONL transcript discovery.
-- Fork-aware inherited-request filtering and duplicate suppression.
-- Optional OMP stats refresh with `/cost refresh`.
-- Scrollable terminal overlay that does not inject the report into model context.
+- Replaced the text-report → regex-reparse rendering pipeline with structured core, aggregation, export, and view modules.
+- Renamed ambiguous request counts in the UI to LLM calls.
+- Removed the standalone Agent × Model view; its data now appears as bidirectional drill-down in Models and Agents.
+- Public extension entry is now `index.js`; `styled.js` and `tabbed.js` remain compatibility entries.
 
 ### Compatibility
 
-- Extension load path uses Node built-ins only and does not import OMP internal runtime packages.
-- Pricing enrichment is deferred until `/cost` runs, avoiding eager `pi_natives` loading on packaged Linux builds.
+- No third-party runtime dependencies.
+- No eager imports from OMP runtime/native packages.
+- Clipboard transports are activated only when the user performs a copy action.
+
+## [0.4.0] - 2026-08-31
+
+Visual-design release with OMP theme-aware colors, stable model color identities, cost-share bars, dominant-model badges, and agent-grouped model hierarchy.
+
+## [0.3.0] - 2026-08-31
+
+Tabbed TUI release with Overview, Models, Agents, Agent × Model, and Details.
+
+## [0.2.0] - 2026-08-31
+
+First public release with recursive main/subagent/advisor token and API-equivalent cost accounting.
