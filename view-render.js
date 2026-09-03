@@ -49,7 +49,7 @@ export function listHeaderLine(view, width, label = "NAME") {
       "TOKENS".padStart(layout.tokens),
       "COST".padStart(layout.cost),
       shareHeading(view.metric).padStart(layout.share),
-      "DISTRIBUTION".padEnd(layout.bar),
+      fitAnsi("DISTRIBUTION", layout.bar),
     ].join(" "));
   }
   const cells = [
@@ -57,24 +57,8 @@ export function listHeaderLine(view, width, label = "NAME") {
     metricTitle(view.metric).toUpperCase().padStart(layout.value),
     shareHeading(view.metric).padStart(layout.share),
   ];
-  if (layout.bar) cells.push("DISTRIBUTION".padEnd(layout.bar));
+  if (layout.bar) cells.push(fitAnsi("DISTRIBUTION", layout.bar));
   return view.dim(cells.join(" "));
-}
-
-export function actorHeaderLine(view, width) {
-  if (width < 94) return listHeaderLine(view, width, "TYPE");
-  const bar = 8;
-  const nameWidth = Math.max(12, width - 62);
-  return view.dim([
-    fitAnsi("TYPE", nameWidth),
-    "CALLS".padStart(8),
-    "CALL%".padStart(7),
-    "TOKENS".padStart(9),
-    "TOK%".padStart(7),
-    "COST".padStart(9),
-    "COST%".padStart(7),
-    `BAR(${metricTitle(view.metric).toUpperCase()})`.padEnd(bar),
-  ].join(" "));
 }
 
 function itemNameCell(view, item, layout, selected, color) {
@@ -159,15 +143,13 @@ export function modalRows(view) {
   if (view.modal === "help") {
     return [
       view.heading("HELP · METRICS & CONTROLS"),
-      view.separator(),
       view.detail("Calls are provider calls with usage metadata; they are not user prompts or task count.", 0),
       view.detail("Token% includes input, output, cache read/write, and orchestration tokens.", 0),
       view.detail("Cost% is API-equivalent. Intensity = cost share ÷ token share; 1.00× is average.", 0),
       view.separator(),
       view.detail("Tab/Shift+Tab tabs     ↑↓ or j/k select     Enter/→ expand", 0),
       view.detail("←/Esc collapse/back    m metric             s sort", 0),
-      view.detail("c copy                 r refresh            ? help", 0),
-      view.detail("q close                Esc closes this panel", 0),
+      view.detail("c copy   r refresh   ? help   q/Esc close this help panel", 0),
     ];
   }
   const options = copyOptions();
@@ -179,7 +161,6 @@ export function modalRows(view) {
     rows.push({ text: `${marker} ${selected ? view.strong(option.label) : option.label}`, selectable: false });
   });
   rows.push(
-    view.separator(),
     view.detail(selectedOption?.description ?? "", 0),
     view.detail("↑↓ choose · Enter copy · Esc cancel", 0),
   );
@@ -199,22 +180,18 @@ export function styleContentRow(view, entry, width, selectedId) {
 
   const plain = fitAnsi(stripAnsi(content), width);
   try {
-    if (typeof view.theme?.bgFill === "function") {
-      const foreground = typeof view.theme?.fgOnBg === "function"
-        ? view.theme.fgOnBg("text", "selectedBg", plain)
-        : typeof view.theme?.fg === "function"
-          ? view.theme.fg("text", plain)
-          : plain;
-      return view.theme.bgFill("selectedBg", foreground);
+    if (typeof view.theme?.bgFill === "function" && typeof view.theme?.fgOnBg === "function") {
+      return view.theme.bgFill("selectedBg", view.theme.fgOnBg("text", "selectedBg", plain));
     }
     if (typeof view.theme?.inverse === "function") return view.theme.inverse(plain);
+    if (typeof view.theme?.bgFill === "function") return view.theme.bgFill("selectedBg", view.strong(plain));
   } catch {}
-  return plain;
+  return view.strong(plain);
 }
 
 function footerHint(view, width) {
   if (view.modal === "copy") return "↑↓ choose  Enter copy  Esc cancel";
-  if (view.modal === "help") return "Esc close help";
+  if (view.modal === "help") return "q/Esc close help";
   if (width >= 104) return "↑↓ select  Enter expand  m metric  s sort  c copy  r refresh  ? help  q close";
   return "↑↓ select  Enter expand  m metric  c copy  ? help  q close";
 }
