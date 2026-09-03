@@ -14,7 +14,7 @@ import {
   overviewRows,
   providerRows,
 } from "./view-pages.js";
-import { renderExplorer } from "./view-render.js";
+import { listHeaderLine, renderExplorer } from "./view-render.js";
 
 const TABS = Object.freeze([
   { id: "overview", label: "Overview", short: "Overview" },
@@ -27,6 +27,35 @@ const TABS = Object.freeze([
 
 const PALETTE = ["accent", "success", "warning", "mdLink", "mdCode", "thinkingMedium", "thinkingHigh", "toolTitle"];
 const METRICS = ["cost", "tokens", "calls"];
+
+export const PANEL_HEIGHT_RATIO = 0.56;
+const PANEL_CHROME_ROWS = 6;
+
+const RAW_KEYS = Object.freeze({
+  escape: ["\u001b", "\u001b\u001b"],
+  esc: ["\u001b", "\u001b\u001b"],
+  tab: ["\t"],
+  "shift+tab": ["\u001b[Z"],
+  enter: ["\r", "\n"],
+  return: ["\r", "\n"],
+  up: ["\u001b[A", "\u001bOA"],
+  down: ["\u001b[B", "\u001bOB"],
+  left: ["\u001b[D", "\u001bOD"],
+  right: ["\u001b[C", "\u001bOC"],
+  pageUp: ["\u001b[5~"],
+  pageDown: ["\u001b[6~"],
+  home: ["\u001b[H", "\u001b[1~", "\u001bOH"],
+  end: ["\u001b[F", "\u001b[4~", "\u001bOF"],
+  "ctrl+c": ["\u0003"],
+});
+
+function matchesKittyCodepoint(data, codepoint) {
+  const match = String(data).match(/^\u001b\[(\d+)(?::\d*)?(?:;(\d+)(?::\d+)?)?(?:;[\d:]*)?u$/);
+  if (!match || Number(match[1]) !== codepoint) return false;
+  // Modifier fields are encoded as 1 + bitmask. Plain Escape/Enter/Tab are
+  // accepted here; richer combinations are handled by OMP's matchesKey.
+  return match[2] === undefined || Number(match[2]) === 1;
+}
 
 function noop() {}
 
@@ -52,6 +81,7 @@ export class CostExplorerView {
     this.lastWidth = 100;
     this.lastRendered = null;
     this.lastRenderedWidth = -1;
+    this.lastRenderedRows = -1;
     this.rebuildColors();
   }
 
@@ -93,6 +123,7 @@ export class CostExplorerView {
   invalidate() {
     this.lastRendered = null;
     this.lastRenderedWidth = -1;
+    this.lastRenderedRows = -1;
   }
 
   requestRender() {
@@ -100,9 +131,16 @@ export class CostExplorerView {
     this.tui?.requestRender?.();
   }
 
+  terminalRows() {
+    return Number.isFinite(this.tui?.terminal?.rows) ? this.tui.terminal.rows : 40;
+  }
+
+  panelMaxRows() {
+    return Math.max(PANEL_CHROME_ROWS + 1, Math.floor(this.terminalRows() * PANEL_HEIGHT_RATIO));
+  }
+
   pageSize() {
-    const rows = Number.isFinite(this.tui?.terminal?.rows) ? this.tui.terminal.rows : 40;
-    return Math.max(9, rows - 7);
+    return Math.max(1, this.panelMaxRows() - PANEL_CHROME_ROWS);
   }
 
   sorted(rows) {
@@ -149,6 +187,10 @@ export class CostExplorerView {
     return { text: this.accent(this.strong(text)), selectable: false };
   }
 
+  columnHeader(width, label = "NAME") {
+    return { text: listHeaderLine(this, width, label), selectable: false };
+  }
+
   separator() {
     return { text: "", selectable: false };
   }
@@ -156,11 +198,11 @@ export class CostExplorerView {
   buildRows(width = this.lastWidth - 4) {
     const id = this.currentTab().id;
     if (id === "overview") return overviewRows(this, width);
-    if (id === "providers") return providerRows(this);
-    if (id === "models") return modelRows(this);
-    if (id === "agents") return agentRows(this);
-    if (id === "advisors") return advisorRows(this);
-    return detailsRows(this);
+    if (id === "providers") return providerRows(this, width);
+    if (id === "models") return modelRows(this, width);
+    if (id === "agents") return agentRows(this, width);
+    if (id === "advisors") return advisorRows(this, width);
+    return detailsRows(this, width);
   }
 
   selectableRows(rows) {
@@ -300,6 +342,30 @@ export class CostExplorerView {
     this.requestRender();
   }
 
+  close() {
+    if (this.closed) return;
+    this.closed = true;
+    this.done(undefined);
+  }
+
+  key(data, key) {
+    try {
+      if (typeof this.callbacks.matchesKey === "function" && this.callbacks.matchesKey(data, key)) return true;
+    } catch {}
+    if (RAW_KEYS[key]?.includes(data)) return true;
+    if (key === "escape" || key === "esc") return matchesKittyCodepoint(data, 27);
+    if (key === "enter" || key === "return") return matchesKittyCodepoint(data, 13);
+    if (key === "tab") return matchesKittyCodepoint(data, 9);
+    return false;
+  }
+
+  interrupted(data) {
+    try {
+      if (this.keybindings?.matches?.(data, "app.interrupt")) return true;
+    } catch {}
+    return this.key(data, "ctrl+c");
+  }
+
   async runCopy() {
     const option = copyOptions()[this.modalIndex];
     if (!option) return;
@@ -338,24 +404,28 @@ export class CostExplorerView {
   }
 
   handleModalInput(data) {
-    if (data === "\u001b" || data === "q" || data === "Q") {
+    if (this.key(data, "escape") || this.key(data, "esc") || data === "q" || data === "Q") {
       this.modal = null;
       this.requestRender();
       return true;
     }
+    if (this.interrupted(data)) {
+      this.close();
+      return true;
+    }
     if (this.modal === "help") return true;
     const options = copyOptions();
-    if (data === "j" || data === "\u001b[B" || data === "\u001bOB") {
+    if (data === "j" || this.key(data, "down")) {
       this.modalIndex = Math.min(options.length - 1, this.modalIndex + 1);
       this.requestRender();
       return true;
     }
-    if (data === "k" || data === "\u001b[A" || data === "\u001bOA") {
+    if (data === "k" || this.key(data, "up")) {
       this.modalIndex = Math.max(0, this.modalIndex - 1);
       this.requestRender();
       return true;
     }
-    if (data === "\r" || data === "\n") {
+    if (this.key(data, "enter") || this.key(data, "return")) {
       void this.runCopy();
       return true;
     }
@@ -368,36 +438,31 @@ export class CostExplorerView {
       this.handleModalInput(data);
       return;
     }
-    if (this.keybindings?.matches?.(data, "app.interrupt") || data === "\u0003") {
-      this.closed = true;
-      this.done(undefined);
+    if (this.key(data, "escape") || this.key(data, "esc")) {
+      if (!this.collapseOrParent()) this.close();
+      return;
+    }
+    if (this.interrupted(data)) {
+      this.close();
       return;
     }
     if (data === "q" || data === "Q") {
-      this.closed = true;
-      this.done(undefined);
+      this.close();
       return;
     }
-    if (data === "\u001b") {
-      if (!this.collapseOrParent()) {
-        this.closed = true;
-        this.done(undefined);
-      }
-      return;
-    }
-    if (data === "\t") {
+    if (this.key(data, "tab")) {
       this.switchTab(1);
       return;
     }
-    if (data === "\u001b[Z") {
+    if (this.key(data, "shift+tab")) {
       this.switchTab(-1);
       return;
     }
-    if (data === "\u001b[C" || data === "\u001bOC") {
+    if (this.key(data, "right")) {
       this.toggleSelected(true);
       return;
     }
-    if (data === "\u001b[D" || data === "\u001bOD") {
+    if (this.key(data, "left")) {
       this.collapseOrParent();
       return;
     }
@@ -405,13 +470,13 @@ export class CostExplorerView {
       this.selectTab(Number(data) - 1);
       return;
     }
-    if (data === "j" || data === "\u001b[B" || data === "\u001bOB") this.moveSelection(1);
-    else if (data === "k" || data === "\u001b[A" || data === "\u001bOA") this.moveSelection(-1);
-    else if (data === "\u001b[6~") this.moveSelection(Math.max(1, this.pageSize() - 2));
-    else if (data === "\u001b[5~") this.moveSelection(-Math.max(1, this.pageSize() - 2));
-    else if (data === "\u001b[H" || data === "\u001b[1~" || data === "\u001bOH") this.selectBoundary(false);
-    else if (data === "\u001b[F" || data === "\u001b[4~" || data === "\u001bOF") this.selectBoundary(true);
-    else if (data === "\r" || data === "\n") this.toggleSelected(false);
+    if (data === "j" || this.key(data, "down")) this.moveSelection(1);
+    else if (data === "k" || this.key(data, "up")) this.moveSelection(-1);
+    else if (this.key(data, "pageDown")) this.moveSelection(Math.max(1, this.pageSize() - 2));
+    else if (this.key(data, "pageUp")) this.moveSelection(-Math.max(1, this.pageSize() - 2));
+    else if (this.key(data, "home")) this.selectBoundary(false);
+    else if (this.key(data, "end")) this.selectBoundary(true);
+    else if (this.key(data, "enter") || this.key(data, "return")) this.toggleSelected(false);
     else if (data === "m" || data === "M") this.cycleMetric();
     else if (data === "s" || data === "S") this.cycleSort();
     else if (data === "c" || data === "C") this.openCopy();
