@@ -10,7 +10,7 @@ export const COST_OVERLAY_OPTIONS = Object.freeze({
   overlayOptions: Object.freeze({
     anchor: "bottom-center",
     width: "100%",
-    maxHeight: "56%",
+    maxHeight: "52%",
     margin: 0,
   }),
 });
