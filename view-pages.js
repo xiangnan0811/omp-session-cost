@@ -23,11 +23,14 @@ export function overviewRows(view, width) {
     view.separator(),
     view.heading("ACTOR TYPE"),
   ];
-  if (width >= 86) {
+  if (width >= 94) {
+    const nameWidth = Math.max(12, width - 62);
     rows.push({
-      text: view.dim(`${"TYPE".padEnd(Math.max(10, width - 67))}    CALLS   CALL%    TOKENS    TOK%      COST   COST%  BAR(${metricTitle(view.metric).toUpperCase()})`),
+      text: view.dim(`${"TYPE".padEnd(nameWidth)} ${"CALLS".padStart(8)} ${"CALL%".padStart(7)} ${"TOKENS".padStart(9)} ${"TOK%".padStart(7)} ${"COST".padStart(9)} ${"COST%".padStart(7)} BAR`),
       selectable: false,
     });
+  } else {
+    rows.push(view.columnHeader(width, "TYPE"));
   }
   for (const actor of view.sorted(view.report.actorTypes)) {
     rows.push(view.item(`actor:${actor.actorType}`, actor, { kind: "Actor type", renderer: "actor" }));
@@ -42,10 +45,10 @@ export function overviewRows(view, width) {
   return rows;
 }
 
-export function providerRows(view) {
+export function providerRows(view, width) {
   const rows = [
-    view.heading(`PROVIDERS · sorted by ${view.sortMode === "name" ? "name" : metricTitle(view.metric)} · percentages are share of session`),
-    view.separator(),
+    view.heading(`PROVIDERS · sorted by ${view.sortMode === "name" ? "name" : metricTitle(view.metric)} · percentage is share of the visible parent`),
+    view.columnHeader(width),
   ];
   const expanded = view.tabState(view.expanded);
   for (const provider of view.sorted(view.report.providers)) {
@@ -86,10 +89,10 @@ export function providerRows(view) {
   return rows;
 }
 
-export function modelRows(view) {
+export function modelRows(view, width) {
   const rows = [
-    view.heading(`MODELS · sorted by ${view.sortMode === "name" ? "name" : metricTitle(view.metric)} · percentages are share of session`),
-    view.separator(),
+    view.heading(`MODELS · sorted by ${view.sortMode === "name" ? "name" : metricTitle(view.metric)} · percentage is share of the visible parent`),
+    view.columnHeader(width),
   ];
   const expanded = view.tabState(view.expanded);
   for (const model of view.sorted(view.report.models)) {
@@ -143,10 +146,10 @@ function agentGroup(view, rows, title, actorType) {
   rows.push(view.separator());
 }
 
-export function agentRows(view) {
+export function agentRows(view, width) {
   const rows = [
     view.heading(`AGENTS · sorted by ${view.sortMode === "name" ? "name" : metricTitle(view.metric)} · Enter expands model attribution`),
-    view.separator(),
+    view.columnHeader(width),
   ];
   agentGroup(view, rows, "MAIN", "main");
   agentGroup(view, rows, "SUBAGENTS", "subagent");
@@ -207,10 +210,10 @@ function advisorGroup(view, rows, title, scope) {
   }
 }
 
-export function advisorRows(view) {
+export function advisorRows(view, width) {
   const rows = [
     view.heading("ADVISORS · review behavior, owner attribution, and model distribution"),
-    view.separator(),
+    view.columnHeader(width),
   ];
   advisorGroup(view, rows, "MAIN-SESSION ADVISORS", "main");
   advisorGroup(view, rows, "SUBAGENT ADVISORS", "subagent");
