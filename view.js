@@ -28,7 +28,7 @@ const TABS = Object.freeze([
 const PALETTE = ["accent", "success", "warning", "mdLink", "mdCode", "thinkingMedium", "thinkingHigh", "toolTitle"];
 const METRICS = ["cost", "tokens", "calls"];
 
-export const PANEL_HEIGHT_RATIO = 0.56;
+export const PANEL_HEIGHT_RATIO = 0.52;
 const PANEL_CHROME_ROWS = 6;
 
 const RAW_KEYS = Object.freeze({
@@ -52,8 +52,6 @@ const RAW_KEYS = Object.freeze({
 function matchesKittyCodepoint(data, codepoint) {
   const match = String(data).match(/^\u001b\[(\d+)(?::\d*)?(?:;(\d+)(?::\d+)?)?(?:;[\d:]*)?u$/);
   if (!match || Number(match[1]) !== codepoint) return false;
-  // Modifier fields are encoded as 1 + bitmask. Plain Escape/Enter/Tab are
-  // accepted here; richer combinations are handled by OMP's matchesKey.
   return match[2] === undefined || Number(match[2]) === 1;
 }
 
