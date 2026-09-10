@@ -2,6 +2,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { finite } from "./format.js";
 import { exists } from "./transcript.js";
+import { observedCost } from "./diagnostics.js";
 
 function inferStatsDbCandidates(rootSessionFile) {
   const candidates = [];
@@ -50,7 +51,7 @@ async function readStatsRows(dbPath, sessionFiles) {
       `);
     }
     for (const file of sessionFiles) {
-      for (const row of statement.all(file)) rows.set(`${row.entry_id}\u0000${finite(row.timestamp)}`, row);
+      for (const row of statement.all(file)) rows.set(`${file}\u0000${row.entry_id}\u0000${finite(row.timestamp)}`, row);
     }
     return { rows, error: null };
   } catch (error) {
@@ -60,19 +61,18 @@ async function readStatsRows(dbPath, sessionFiles) {
   }
 }
 
-function applyStatsRows(calls, rows) {
+export function applyStatsRows(calls, rows) {
   let matched = 0;
   for (const call of calls) {
-    const row = rows.get(`${call.entryId}\u0000${call.statsTimestamp}`);
+    const row = rows.get(`${call.sessionFile}\u0000${call.entryId}\u0000${call.statsTimestamp}`);
     if (!row) continue;
     matched += 1;
-    call.cost = {
-      input: finite(row.cost_input),
-      output: finite(row.cost_output),
-      cacheRead: finite(row.cost_cache_read),
-      cacheWrite: finite(row.cost_cache_write),
-      total: finite(row.cost_total),
-    };
+    call.statsCost = observedCost({ input: row.cost_input, output: row.cost_output,
+      cacheRead: row.cost_cache_read, cacheWrite: row.cost_cache_write, total: row.cost_total });
+    if (call.statsCost?.total === null || !call.statsCost) continue;
+    call.selectedCost = { ...call.statsCost };
+    call.cost = { ...call.statsCost };
+    call.priceStatus = call.statsCost.total === 0 ? "explicit-zero" : "recorded";
     if (row.premium_requests !== undefined) call.premiumRequests = finite(row.premium_requests);
     call.costSource = "stats.db";
   }

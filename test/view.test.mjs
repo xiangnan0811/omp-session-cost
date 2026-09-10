@@ -170,9 +170,14 @@ test("copy menu invokes selected export callback", async () => {
   explorer.handleInput("c");
   assert.equal(explorer.modal, "copy");
   explorer.handleInput("\r");
+  assert.equal(copied, null, "opening a preview must not copy yet");
+  assert.equal(explorer.modal, "preview");
+  const payload = explorer.preview.payload;
+  explorer.handleInput("\r");
   await new Promise(resolve => setTimeout(resolve, 0));
   assert.equal(copied.mode, "brief");
-  assert.equal(explorer.modal, null);
+  assert.equal(copied.context.payload, payload);
+  assert.equal(explorer.modal, "preview");
   assert.match(explorer.toast, /done/);
 });
 

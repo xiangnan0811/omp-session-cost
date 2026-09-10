@@ -139,7 +139,42 @@ export function metricBar(view, width) {
   return clipAnsi(`Metric: ${chips}  ${suffix}`, width);
 }
 
+function wrapPlain(text, width) {
+  const rows = [];
+  for (const line of String(text).split("\n")) {
+    let part = "", cells = 0;
+    for (const ch of line) {
+      const n = textWidth(ch);
+      if (cells + n > width && part) { rows.push(part); part = ""; cells = 0; }
+      part += ch; cells += n;
+    }
+    rows.push(part);
+  }
+  return rows;
+}
+
 export function modalRows(view) {
+  const width = Math.max(4, view.lastWidth - 4);
+  if (view.modal === "edit") {
+    const label = { question: "Analysis question", protectedScopes: "Protected / do-not-optimize scopes", annotation: "User annotation (not plugin-verified)", savePath: "Save exact preview, new file only" }[view.editing.field];
+    return [view.heading(label), ...wrapPlain(view.editing.value + "▏", width).map(text => view.detail(text, 0, "text")),
+      view.detail("Type or paste; Backspace deletes, Ctrl+U clears, Enter accepts, Esc cancels.", 0)];
+  }
+  if (["preview", "subject"].includes(view.modal)) {
+    const p = view.preview;
+    if (!p.wrapCache || p.wrapCache.width !== width) {
+      const text = p.payload.slice(0, 100000);
+      const wrapped = wrapPlain(text, width);
+      const truncated = p.payload.length > text.length || wrapped.length > 5000;
+      p.wrapCache = { width, truncated, rows: wrapped.slice(0, 5000).map(line => view.detail(line, 0, line.startsWith("#") ? "accent" : "text")) };
+      if (truncated) p.wrapCache.rows.push(view.detail("PREVIEW LIMIT: only the first 100,000 characters / 5,000 wrapped rows are shown. The complete payload is unchanged. Save for full review; excerpt-mode clipboard is disabled.", 0, "warning"));
+    }
+    return [view.heading(`${view.modal === "subject" ? "SUBJECT DIAGNOSTICS" : "COPY PREVIEW"} · ${p.scopeLabel} · ${p.calls} calls · ${p.bytes} bytes`),
+      view.detail(p.includeEvidence ? "EXCERPTS ON: review every excerpt; automatic redaction is not a guarantee." : "Metadata only; no transcript excerpts. e toggles reviewed excerpts.", 0, p.includeEvidence ? "warning" : "muted"),
+      view.detail("f scope · g question · p protected scope · n annotation · Enter copy · s save", 0),
+      ...(view.modal === "subject" ? [...p.summaryLines.map(line => view.detail(line, 0, "text")), view.separator()] : []),
+      ...p.wrapCache.rows];
+  }
   if (view.modal === "help") {
     return [
       view.heading("HELP · METRICS & CONTROLS"),
@@ -149,7 +184,11 @@ export function modalRows(view) {
       view.separator(),
       view.detail("Tab/Shift+Tab tabs     ↑↓ or j/k select     Enter/→ expand", 0),
       view.detail("←/Esc collapse/back    m metric             s sort", 0),
-      view.detail("c copy   r refresh   ? help   q/Esc close this help panel", 0),
+      view.detail("c copy/preview   d subject details   r refresh   q/Esc back", 0),
+      view.detail("f scope: current/main/all   b bookmark   w newly observed records", 0),
+      view.detail("Preview: e evidence, f scope, g goal, p protected, n annotation, s save", 0),
+      view.detail("Preview/Help: arrows, PgUp/PgDn, Home/End scroll. Enter copies exact preview.", 0),
+      view.detail("Bookmarks and analysis context persist only in this process/session.", 0),
     ];
   }
   const options = copyOptions();
@@ -162,7 +201,7 @@ export function modalRows(view) {
   });
   rows.push(
     view.detail(selectedOption?.description ?? "", 0),
-    view.detail("↑↓ choose · Enter copy · Esc cancel", 0),
+    view.detail("↑↓ choose · Enter preview · Esc cancel", 0),
   );
   return rows;
 }
@@ -190,9 +229,11 @@ export function styleContentRow(view, entry, width, selectedId) {
 }
 
 function footerHint(view, width) {
-  if (view.modal === "copy") return "↑↓ choose  Enter copy  Esc cancel";
+  if (view.modal === "copy") return "↑↓ choose  Enter preview  Esc cancel";
+  if (view.modal === "edit") return "Enter accept  Ctrl+U clear  Esc cancel";
+  if (["preview", "subject"].includes(view.modal)) return width >= 95 ? "↑↓/Pg scroll  Enter copy  s save  e excerpts  f scope  g goal  p protect  n note  Esc back" : "↑↓ scroll  Enter copy  s save  e excerpts  f scope  Esc back";
   if (view.modal === "help") return "q/Esc close help";
-  if (width >= 104) return "↑↓ select  Enter expand  m metric  s sort  c copy  r refresh  ? help  q close";
+  if (width >= 104) return "↑↓ select  Enter expand  d details  m metric  c copy  f scope  r refresh  ? help  q close";
   return "↑↓ select  Enter expand  m metric  c copy  ? help  q close";
 }
 
@@ -208,7 +249,8 @@ export function renderExplorer(view, maxWidth, tabs) {
   if (!view.modal) view.ensureSelectedVisible(rows);
   const tabId = view.currentTab().id;
   const maxOffset = Math.max(0, rows.length - page);
-  const offset = view.modal ? 0 : Math.min(maxOffset, view.offsets.get(tabId) ?? 0);
+  const offset = view.modal ? Math.min(maxOffset, view.modalOffset || 0) : Math.min(maxOffset, view.offsets.get(tabId) ?? 0);
+  if (view.modal) view.modalOffset = offset;
   if (!view.modal) view.offsets.set(tabId, offset);
   const visible = rows.slice(offset, offset + page);
   const minimumBodyRows = view.modal ? visible.length : Math.min(8, page);

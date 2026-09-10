@@ -15,10 +15,11 @@ export function overviewRows(view, width) {
   const t = view.report.total;
   const rows = [
     view.heading("SUMMARY"),
+    view.detail(`Scope: ${view.report.scope?.actorType || view.report.scope?.agent || view.report.scope?.modelId || "all selected actors"} · ${view.report.scope?.branch || "recorded-spend"} · d details / f scope`, 0),
     { text: `${view.muted("LLM calls")}             ${view.strong(formatInt(t.calls))}`, selectable: false },
     { text: `${view.muted("Failed calls")}          ${t.failed ? view.error(formatInt(t.failed)) : view.strong("0")}`, selectable: false },
     { text: `${view.muted("Measured tokens")}       ${view.strong(formatTokens(t.measuredTokens))}`, selectable: false },
-    { text: `${view.muted("API-equivalent cost")}   ${view.warning(view.strong(formatCost(t.costTotal)))}`, selectable: false },
+    { text: `${view.muted("API-equivalent cost")}   ${view.strong(formatCost(t.costTotal))}`, selectable: false },
     { text: `${view.muted("Cache-read ratio")}      ${view.strong(formatPercent(percent(t.cacheRead, t.measuredTokens)))}`, selectable: false },
     view.separator(),
     view.heading("ACTOR TYPE"),
@@ -34,6 +35,13 @@ export function overviewRows(view, width) {
   }
   for (const actor of view.sorted(view.report.actorTypes)) {
     rows.push(view.item(`actor:${actor.actorType}`, actor, { kind: "Actor type", renderer: "actor" }));
+  }
+  const measurement = view.report.measurement;
+  if (view.report.metadata?.invalidJson || view.report.metadata?.partialTails || view.report.metadata?.changedFiles || view.report.metadata?.unavailableFiles) rows.push(view.detail("Scan has exclusions or changed/unavailable files; inspect Details before comparing totals.", 0, "warning"));
+  if (measurement) {
+    rows.push(view.detail(`Usage: ${measurement.nonzeroUsageRecords} nonzero · ${measurement.zeroUsageRecords} known zero · ${measurement.unmeteredResponses} responses without usage`, 0));
+    if (measurement.missingPriceRecords || measurement.incompleteUsageRecords) rows.push(view.detail(`Unknowns: ${measurement.missingPriceRecords} missing prices · ${measurement.incompleteUsageRecords} incomplete usage; totals are known subtotals`, 0, "warning"));
+    rows.push(view.detail(`Historical thinking: ${measurement.historicalThinkingRecords}/${measurement.usageRecords} records · request effort ${measurement.requestEffortRecords}/${measurement.usageRecords}`, 0));
   }
   rows.push(view.separator(), view.heading("CONCENTRATION"));
   const provider = view.sorted(view.report.providers)[0];
@@ -148,7 +156,7 @@ function agentGroup(view, rows, title, actorType) {
 
 export function agentRows(view, width) {
   const rows = [
-    view.heading(`AGENTS · sorted by ${view.sortMode === "name" ? "name" : metricTitle(view.metric)} · Enter expands model attribution`),
+    view.heading(`AGENTS · sorted by ${view.sortMode === "name" ? "name" : metricTitle(view.metric)} · Enter expands attribution · d opens full subject diagnostics`),
     view.columnHeader(width),
   ];
   agentGroup(view, rows, "MAIN", "main");
@@ -225,6 +233,9 @@ export function detailsRows(view) {
   const p = view.report.pricing ?? {};
   const rows = [
     view.heading("SESSION"),
+    view.detail(`Schema 2 diagnostics · scope ${view.report.scope?.branch || "recorded-spend"} · copied names are pseudonymized`, 0),
+    view.detail(`Snapshot frozen       ${formatTimestamp(view.report.snapshot?.frozenAt || 0)}`, 0),
+    view.detail(`Local manifest digest ${view.report.scope?.manifestDigest || view.report.snapshot?.recordManifestDigest || "not recorded"}`, 0),
     view.detail(`ID                    ${view.report.sessionId}`, 0, "text"),
     view.detail(`Root transcript       ${view.report.rootSessionFile}`, 0, "mdCode"),
     view.detail(`Generated             ${formatTimestamp(view.report.generatedAt)}`, 0),
@@ -236,6 +247,9 @@ export function detailsRows(view) {
     view.detail(`Fork-aware incremental view      ${m.forkAware ? "yes" : "no"}`, 0),
     view.detail(`Inherited calls excluded         ${formatInt(m.excludedInheritedCalls)}`, 0),
     view.detail(`Duplicate calls removed          ${formatInt(m.duplicateCallsRemoved)}`, 0),
+    view.separator(),
+    view.heading("LOCAL FILE MAP · not copied"),
+    ...(view.report.snapshot?.files || []).map(f => view.detail(`${f.fileKey} → ${f.localPath || "unavailable"}`, 0)),
     view.separator(),
     view.heading("PRICING"),
     view.detail(`stats.db              ${p.dbPath ?? "not found; transcript prices used"}`, 0, p.dbPath ? "mdCode" : "muted"),
