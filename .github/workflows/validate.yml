@@ -12,8 +12,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 22
       - run: npm run check
       - run: npm pack --dry-run
+      - name: Archive validated source
+        run: git archive --format=zip HEAD -o "$RUNNER_TEMP/validated-source.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: validated-source
+          path: ${{ runner.temp }}/validated-source.zip
+          retention-days: 7
