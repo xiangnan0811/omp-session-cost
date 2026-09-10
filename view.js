@@ -1,11 +1,14 @@
 import {
   formatCost,
   formatInt,
+  formatTokens,
   metricValue,
   percent,
   sortRows,
 } from "./format.js";
-import { copyOptions } from "./export.js";
+import { copyOptions, buildCopyPayload } from "./export.js";
+import { scopeReport, selectionFilter } from "./core.js";
+import { cleanText } from "./diagnostics.js";
 import {
   advisorRows,
   agentRows,
@@ -63,6 +66,15 @@ export class CostExplorerView {
     this.theme = theme;
     this.keybindings = keybindings;
     this.report = report;
+    this.baseReport = report;
+    this.scopeMode = "current";
+    this.profile = { question: "", protectedScopes: "", annotation: "", ...(callbacks.profile || {}) };
+    this.bookmark = callbacks.bookmark || null;
+    this.sinceBookmark = false;
+    this.modalOffset = 0;
+    this.preview = null;
+    this.editing = null;
+    this.busy = false;
     this.callbacks = callbacks;
     this.done = done;
     this.activeTab = 0;
@@ -332,11 +344,13 @@ export class CostExplorerView {
   openCopy() {
     this.modal = "copy";
     this.modalIndex = 0;
+    this.modalOffset = 0;
     this.requestRender();
   }
 
   openHelp() {
     this.modal = "help";
+    this.modalOffset = 0;
     this.requestRender();
   }
 
@@ -364,20 +378,114 @@ export class CostExplorerView {
     return this.key(data, "ctrl+c");
   }
 
+  exportContext() {
+    const p = this.preview;
+    let report = this.report;
+    const clearActors = { actorType: undefined, agent: undefined, advisorKey: undefined, provider: undefined, modelId: undefined };
+    if (p.scope === "main") report = scopeReport(report, { ...clearActors, actorType: "main" });
+    else if (p.scope === "all") report = scopeReport(report, clearActors);
+    else if (p.scope === "selection") report = scopeReport(report, { ...clearActors, ...selectionFilter(p.selection) });
+    return { ...this.profile, includeEvidence: p.includeEvidence, selection: null, tabId: p.tabId, report };
+  }
+
+  rebuildPreview() {
+    if (!this.preview) return;
+    const context = this.exportContext();
+    const mode = this.preview.mode === "selection" ? "brief" : this.preview.mode;
+    this.preview.payload = buildCopyPayload(context.report, mode, context);
+    this.preview.calls = context.report.total.calls;
+    const t = context.report.total, m = context.report.measurement;
+    this.preview.summaryLines = m ? [
+      `${formatInt(t.calls)} usage records · ${formatCost(t.costTotal)} known API-equivalent subtotal · ${formatTokens(t.measuredTokens)} measured tokens`,
+      `Nonzero ${m.nonzeroUsageRecords} · known zero ${m.zeroUsageRecords} · missing usage ${m.unmeteredResponses} · missing price ${m.missingPriceRecords}`,
+      `Input ${formatTokens(t.input)} / ${formatCost(t.costInput)} · Cache read ${formatTokens(t.cacheRead)} / ${formatCost(t.costCacheRead)}`,
+      `Output ${formatTokens(t.output)} / ${formatCost(t.costOutput)} · Cache write ${formatTokens(t.cacheWrite)} / ${formatCost(t.costCacheWrite)}`,
+      `Input P50 ${m.inputDistribution.p50 == null ? "unknown" : formatTokens(m.inputDistribution.p50)} · P95 ${m.inputDistribution.p95 == null ? "unknown" : formatTokens(m.inputDistribution.p95)} · max ${m.inputDistribution.max == null ? "unknown" : formatTokens(m.inputDistribution.max)}`,
+      `Historical thinking: ${[...new Set(m.historicalSettings.map(s => s.value))].join(", ") || "unknown"} (${m.historicalThinkingRecords}/${m.usageRecords}); request effort ${m.requestEffortRecords}/${m.usageRecords}`,
+      `Repeated-status candidates ${context.report.diagnostics?.repeatedStatus?.length || 0} · Incoming intervals ${context.report.diagnostics?.incomingActivity?.length || 0} · Compactions ${context.report.diagnostics?.compactions?.length || 0}`,
+      "Candidates are not guaranteed savings. Scroll for scope, coverage, evidence and interpretation limits."
+    ] : [];
+    this.preview.scopeLabel = this.preview.scope;
+    this.preview.bytes = Buffer.byteLength(this.preview.payload, "utf8");
+    this.preview.wrapCache = null;
+    this.modalOffset = 0;
+    this.requestRender();
+  }
+
+  openPreview(mode = "brief", details = false) {
+    this.preview = { mode, selection: this.currentSelection(), tabId: this.currentTab().id,
+      scope: mode === "selection" || details ? "selection" : "current", includeEvidence: false, payload: "", details };
+    this.modal = details ? "subject" : "preview";
+    try { this.rebuildPreview(); }
+    catch (error) { this.toast = `Preview failed: ${cleanText(error.message)}`; this.modal = "copy"; this.requestRender(); }
+  }
+
   async runCopy() {
-    const option = copyOptions()[this.modalIndex];
-    if (!option) return;
-    const selection = this.currentSelection();
-    const tabId = this.currentTab().id;
-    this.modal = null;
-    this.toast = "Copying…";
+    if (!this.preview || this.busy) return;
+    const p = this.preview;
+    this.render(this.lastWidth);
+    if (p.includeEvidence && p.wrapCache?.truncated) {
+      this.toast = "Excerpt payload exceeds local preview; save it for full review before sharing. Nothing copied.";
+      this.requestRender(); return;
+    }
+    this.busy = true;
+    this.toast = "Copying the exact preview…";
     this.requestRender();
     try {
-      const result = await this.callbacks.onCopy?.(option.id, { selection, tabId });
-      this.toast = result?.message ?? `${option.label} copied`;
-    } catch (error) {
-      this.toast = `Copy failed: ${error instanceof Error ? error.message : String(error)}`;
+      const result = await this.callbacks.onCopy?.(p.mode, { ...this.exportContext(), payload: p.payload });
+      this.toast = result?.message ?? "Copy callback unavailable";
+    } catch (error) { this.toast = `Copy failed: ${cleanText(error.message)}; press s to save.`; }
+    finally { this.busy = false; this.requestRender(); }
+  }
+
+  beginEdit(field) {
+    this.editing = { field, parent: this.modal, value: field === "savePath" ? "omp-cost-diagnostic." + (this.preview?.mode === "json" ? "json" : "md") : this.profile[field] || "" };
+    this.modal = "edit"; this.modalOffset = 0; this.requestRender();
+  }
+
+  async finishEdit() {
+    const edit = this.editing;
+    if (!edit || this.busy) return;
+    if (edit.field === "savePath") {
+      this.busy = true;
+      try {
+        const result = await this.callbacks.onSave?.(edit.value, this.preview.payload);
+        this.toast = result?.message || "Save callback unavailable";
+      } catch (error) { this.toast = `Save failed: ${cleanText(error.message)}`; }
+      finally { this.busy = false; }
+    } else {
+      this.profile[edit.field] = edit.value;
+      this.callbacks.onProfile?.({ ...this.profile });
     }
+    this.modal = edit.parent; this.editing = null;
+    if (edit.field !== "savePath") this.rebuildPreview();
+    else this.requestRender();
+  }
+
+  cycleScope() {
+    const modes = ["current", "main", "all"];
+    this.scopeMode = modes[(modes.indexOf(this.scopeMode) + 1) % modes.length];
+    this.applyScope();
+  }
+
+  applyScope() {
+    try {
+      const clearActors = { actorType: undefined, agent: undefined, advisorKey: undefined, provider: undefined, modelId: undefined };
+      const options = this.scopeMode === "current" ? {} : this.scopeMode === "main" ? { ...clearActors, actorType: "main" } : clearActors;
+      if (this.sinceBookmark && this.bookmark) { options.sinceKeys = this.bookmark.callKeys; options.sinceEventKeys = this.bookmark.eventKeys; }
+      this.report = Object.keys(options).length ? scopeReport(this.baseReport, options) : this.baseReport;
+      this.rebuildColors();
+      this.toast = `Scope ${this.scopeMode}${this.sinceBookmark ? " since bookmark" : ""}: ${this.report.total.calls} calls`;
+    } catch (error) { this.toast = cleanText(error.message); }
+    this.requestRender();
+  }
+
+  markSnapshot() {
+    const scan = this.baseReport._sourceScan;
+    this.bookmark = { sessionId: this.baseReport.sessionId, callKeys: new Set((scan?.calls || this.baseReport.calls || []).map(c => c.recordKey)),
+      eventKeys: new Set((scan?.events || []).map(e => e.key)), frozenAt: this.baseReport.snapshot?.frozenAt || this.baseReport.generatedAt };
+    this.callbacks.onBookmark?.(this.bookmark);
+    this.toast = `Bookmark saved in memory: ${this.bookmark.callKeys.size} records; w toggles newly observed records.`;
     this.requestRender();
   }
 
@@ -389,7 +497,8 @@ export class CostExplorerView {
     try {
       const report = await this.callbacks.onRefresh();
       if (report) {
-        this.report = report;
+        this.baseReport = report;
+        this.applyScope();
         this.rebuildColors();
         this.toast = `Refreshed · ${formatInt(report.total.calls)} calls · ${formatCost(report.total.costTotal)}`;
       }
@@ -402,32 +511,48 @@ export class CostExplorerView {
   }
 
   handleModalInput(data) {
-    if (this.key(data, "escape") || this.key(data, "esc") || data === "q" || data === "Q") {
-      this.modal = null;
-      this.requestRender();
-      return true;
+    if (this.interrupted(data)) { this.close(); return true; }
+    if (this.key(data, "escape") || this.key(data, "esc") || (this.modal !== "edit" && (data === "q" || data === "Q"))) {
+      if (this.busy) return true;
+      if (this.modal === "edit") { this.modal = this.editing.parent; this.editing = null; }
+      else this.modal = this.modal === "preview" ? "copy" : null;
+      this.modalOffset = 0; this.requestRender(); return true;
     }
-    if (this.interrupted(data)) {
-      this.close();
-      return true;
+    if (this.modal === "edit") {
+      if (this.key(data, "enter") || this.key(data, "return")) void this.finishEdit();
+      else if (data === "\x7f" || data === "\b") this.editing.value = Array.from(this.editing.value).slice(0, -1).join("");
+      else if (data === "\x15") this.editing.value = "";
+      else {
+        const plain = data.replace(/^\x1b\[200~/, "").replace(/\x1b\[201~$/, "");
+        if (!/[\x00-\x1f\x7f]/.test(plain)) this.editing.value = (this.editing.value + plain).slice(0, 2000);
+      }
+      this.requestRender(); return true;
     }
-    if (this.modal === "help") return true;
-    const options = copyOptions();
-    if (data === "j" || this.key(data, "down")) {
-      this.modalIndex = Math.min(options.length - 1, this.modalIndex + 1);
-      this.requestRender();
-      return true;
+    if (this.modal === "copy") {
+      if (data === "j" || this.key(data, "down")) this.modalIndex = Math.min(copyOptions().length - 1, this.modalIndex + 1);
+      else if (data === "k" || this.key(data, "up")) this.modalIndex = Math.max(0, this.modalIndex - 1);
+      else if (this.key(data, "enter") || this.key(data, "return")) this.openPreview(copyOptions()[this.modalIndex].id);
+      this.modalOffset = Math.max(0, this.modalIndex + 3 - this.pageSize());
+      this.requestRender(); return true;
     }
-    if (data === "k" || this.key(data, "up")) {
-      this.modalIndex = Math.max(0, this.modalIndex - 1);
-      this.requestRender();
-      return true;
+    if (["preview", "subject"].includes(this.modal)) {
+      if (data === "e") { this.preview.includeEvidence = !this.preview.includeEvidence; this.rebuildPreview(); return true; }
+      if (data === "f") {
+        const modes = ["current", "main", "all", "selection"];
+        this.preview.scope = modes[(modes.indexOf(this.preview.scope) + 1) % modes.length]; this.rebuildPreview(); return true;
+      }
+      if (data === "g" || data === "p" || data === "n" || data === "s") {
+        this.beginEdit({ g: "question", p: "protectedScopes", n: "annotation", s: "savePath" }[data]); return true;
+      }
+      if (this.key(data, "enter") || data === "c") { void this.runCopy(); return true; }
     }
-    if (this.key(data, "enter") || this.key(data, "return")) {
-      void this.runCopy();
-      return true;
-    }
-    return true;
+    if (data === "j" || this.key(data, "down")) this.modalOffset++;
+    else if (data === "k" || this.key(data, "up")) this.modalOffset = Math.max(0, this.modalOffset - 1);
+    else if (this.key(data, "pageDown")) this.modalOffset += this.pageSize();
+    else if (this.key(data, "pageUp")) this.modalOffset = Math.max(0, this.modalOffset - this.pageSize());
+    else if (this.key(data, "home")) this.modalOffset = 0;
+    else if (this.key(data, "end")) this.modalOffset = Number.MAX_SAFE_INTEGER;
+    this.requestRender(); return true;
   }
 
   handleInput(data) {
@@ -478,6 +603,13 @@ export class CostExplorerView {
     else if (data === "m" || data === "M") this.cycleMetric();
     else if (data === "s" || data === "S") this.cycleSort();
     else if (data === "c" || data === "C") this.openCopy();
+    else if (data === "d" || data === "D") this.openPreview("selection", true);
+    else if (data === "f" || data === "F") this.cycleScope();
+    else if (data === "b" || data === "B") this.markSnapshot();
+    else if (data === "w" || data === "W") {
+      if (!this.bookmark) { this.toast = "No bookmark. Press b to mark this snapshot first."; this.requestRender(); }
+      else { this.sinceBookmark = !this.sinceBookmark; this.applyScope(); }
+    }
     else if (data === "?" || data === "h" || data === "H") this.openHelp();
     else if (data === "r" || data === "R") void this.refresh();
   }

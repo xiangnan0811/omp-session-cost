@@ -93,7 +93,7 @@ test("buildReport aggregates providers, models, primary agents, and advisors", a
   const fixture = await richFixture();
   try {
     const report = await buildReport(fixture.root, pi, ctx);
-    assert.equal(report.version, "0.5.2");
+    assert.equal(report.version, "0.6.0");
     assert.equal(report.total.calls, 7);
     assert.equal(report.providers.length, 2);
     assert.equal(report.models.length, 4);
@@ -201,7 +201,7 @@ test("duplicate copied assistant entries are suppressed before advisor tool coun
   try {
     await writeJsonl(root, [header("main"), assistant("main-a", "openai", "m")]);
     await writeJsonl(path.join(dir, "main", "__advisor.jsonl"), [header("adv"), user("u", "update", { synthetic: true }), duplicate]);
-    await writeJsonl(path.join(dir, "main", "Copy", "__advisor.jsonl"), [header("adv-copy"), duplicate]);
+    await writeJsonl(path.join(dir, "main", "Copy", "__advisor.jsonl"), [header("adv"), duplicate]);
     const data = await collectSessionData(root, pi, ctx);
     assert.equal(data.calls.length, 2);
     assert.equal(data.metadata.duplicateCallsRemoved, 1);

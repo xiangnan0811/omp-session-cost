@@ -25,7 +25,7 @@ test("AI brief is self-explaining and labels call/token/cost shares", () => {
   assert.match(text, /Providers/);
   assert.match(text, /Advisors/);
   assert.match(text, /Review updates/);
-  assert.match(text, /Deterministic observations/);
+  assert.match(text, /Strict repeated-status candidates/);
 });
 
 test("AI brief excludes local transcript and stats database paths", () => {
@@ -38,7 +38,8 @@ test("AI brief excludes local transcript and stats database paths", () => {
 test("public JSON excludes sensitive path and database error fields", () => {
   const text = buildPublicJson(fixtureReport());
   const json = JSON.parse(text);
-  assert.equal(json.sessionId, "fixture-session");
+  assert.match(json.sessionId, /^S[0-9a-f]{20}$/);
+  assert.equal(json.schemaVersion, 2);
   assert.equal("rootSessionFile" in json, false);
   assert.equal("dbPath" in json.pricing, false);
   assert.equal("dbError" in json.pricing, false);
@@ -50,14 +51,14 @@ test("selection export includes focused row and child attribution", () => {
   const model = report.models.find(row => row.name === "xai-oauth/grok-4.6");
   const text = buildSelectionMarkdown(report, { kind: "Model", row: model });
   assert.match(text, /xai-oauth\/grok-4\.6/);
-  assert.match(text, /Agents/);
-  assert.match(text, /Frontend/);
-  assert.match(text, /main > advisor/);
+  assert.match(text, /All primary agents/);
+  assert.match(text, /Agent-3/);
+  assert.match(text, /Agent-4/);
 });
 
 test("tab export selects the active dimension", () => {
   const text = buildTabMarkdown(fixtureReport(), "providers");
-  assert.match(text, /Session Cost: Providers/);
+  assert.match(text, /Current tab: providers/);
   assert.match(text, /openai-codex/);
   assert.match(text, /xai-oauth/);
 });
@@ -66,13 +67,13 @@ test("full Markdown contains complete model to agent attribution", () => {
   const text = buildFullMarkdown(fixtureReport());
   assert.match(text, /Model → agent attribution/);
   assert.match(text, /gpt-5\.6-sol/);
-  assert.match(text, /Backend/);
+  assert.match(text, /Agent-2/);
 });
 
 test("copy payload dispatcher maps all menu modes", () => {
   const report = fixtureReport();
   assert.match(buildCopyPayload(report, "brief"), /Analysis Bundle/);
-  assert.match(buildCopyPayload(report, "tab", { tabId: "agents" }), /Session Cost: Agents/);
+  assert.match(buildCopyPayload(report, "tab", { tabId: "agents" }), /Current tab: agents/);
   assert.match(buildCopyPayload(report, "markdown"), /All primary agents/);
   assert.doesNotThrow(() => JSON.parse(buildCopyPayload(report, "json")));
 });

@@ -130,7 +130,7 @@ export async function readHeader(file) {
       }
       if (!entry || typeof entry !== "object") continue;
 
-      // OMP 18 session files physically start with a fixed-width `type: "title"`
+      // OMP 18 session files physically start with a fixed-width `type: "title"
       // slot before the logical `type: "session"` header. Legacy files start
       // directly with the session header. Only this one physical prefix record
       // may precede the logical header; any other first object is malformed.
@@ -223,6 +223,6 @@ export function toolCalls(content) {
 }
 
 export function severityKey(value) {
-  const normalized = String(value ?? "").toLowerCase();
+  const normalized = typeof value === "string" ? value.toLowerCase() : "";
   return normalized === "nit" || normalized === "concern" || normalized === "blocker" ? normalized : "unspecified";
 }

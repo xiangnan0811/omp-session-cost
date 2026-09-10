@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.6.0 - 2026-09-10
+
+### Added
+- Self-contained AI diagnostic bundle, full call/event manifests and schema-2 JSON.
+- Per-subject price components, input distributions, usage/price coverage and historical configuration provenance.
+- Conservative repeated-status evidence, incoming-to-next-main-record intervals and compaction input observations.
+- Frozen byte-prefix snapshots, event/time/subject filters, active-main-path selection and in-memory new-record bookmarks.
+- Subject detail panel, scoped copy preview, user analysis/protected context, reviewed redacted excerpts and full-size save fallback.
+
+### Changed
+- Preserve transcript, stats.db and adopted estimates instead of overwriting price provenance.
+- Copying now previews first; native clipboard transports precede size-bounded OSC 52.
+- Cross-file deduplication requires shared session identity rather than coincident message IDs alone.
+- Default exports pseudonymize agent/session/call identifiers and distinguish unknowns from recorded zeros.
+
+### Preserved
+- Lower-half six-tab TUI, provider/model/agent attribution, Advisor metrics, theme-aware focus and Escape behavior.
+- No analysis-model calls, third-party runtime dependencies, eager native imports or model/workflow configuration changes.
+
+
 All notable changes to this project are documented here.
 
 ## [0.5.2] - 2026-09-03

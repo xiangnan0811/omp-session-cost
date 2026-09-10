@@ -1,0 +1,55 @@
+name: Release
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - package.json
+      - .github/workflows/release.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm run check
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.2.22'
+      - run: bun scripts/check-bun.mjs
+      - run: node scripts/example.mjs dist
+      - run: npm pack --pack-destination dist
+      - run: node scripts/verify-package.mjs "dist/omp-session-cost-$(node -p 'require("./package.json").version').tgz"
+      - name: Publish validated GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p 'require("./package.json").version')
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          TAG="v$VERSION"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; not overwriting it."
+            exit 0
+          fi
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists without a release; inspect it manually."
+            exit 1
+          fi
+          (cd dist && sha256sum *.tgz example-diagnostic.md example-diagnostic.json example-tui.txt > SHA256SUMS)
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "omp-session-cost $TAG" --notes-file RELEASE_NOTES.md --latest dist/*.tgz dist/example-diagnostic.md dist/example-diagnostic.json dist/example-tui.txt dist/SHA256SUMS

@@ -1,6 +1,8 @@
 import * as path from "node:path";
 import { buildAggregates } from "./aggregate.js";
 import { finite, slugify } from "./format.js";
+import { freezeFiles, visitFrozen } from "./snapshot.js";
+import { createDiagnosticIndexer, attachCallFacts, observedCost, digest, numberOrNull } from "./diagnostics.js";
 import { enrichCosts } from "./pricing.js";
 import {
   collectTranscriptsRecursive,
@@ -12,7 +14,6 @@ import {
   toolCalls,
   transcriptIdentity,
   transcriptStem,
-  visitTranscript,
   exists,
 } from "./transcript.js";
 
@@ -74,7 +75,6 @@ function extractCall(entry, file, rootFile, identity, cutoffMs) {
   if (!message || message.role !== "assistant" || !message.usage || typeof message.usage !== "object") return null;
   const provider = typeof message.provider === "string" ? message.provider : "unknown";
   const model = typeof message.model === "string" ? message.model : "unknown";
-  if (provider === "unknown" && model === "unknown") return null;
 
   const envelopeTimestamp = parseTime(entry.timestamp);
   const timestamp = parseTime(message.timestamp) || envelopeTimestamp;
@@ -82,14 +82,15 @@ function extractCall(entry, file, rootFile, identity, cutoffMs) {
   if (cutoffMs > 0 && comparableTimestamp > 0 && comparableTimestamp < cutoffMs) return { inherited: true };
 
   const usage = message.usage;
+  const originalCost = observedCost(usage.cost);
   const orchestration = usage.orchestration && typeof usage.orchestration === "object" ? usage.orchestration : {};
-  const input = finite(usage.input);
-  const output = finite(usage.output);
-  const cacheRead = finite(usage.cacheRead);
-  const cacheWrite = finite(usage.cacheWrite);
-  const orchestrationInput = finite(orchestration.input);
-  const orchestrationOutput = finite(orchestration.output);
-  const orchestrationCacheRead = finite(orchestration.cacheRead);
+  const input = (numberOrNull(usage.input) ?? 0);
+  const output = (numberOrNull(usage.output) ?? 0);
+  const cacheRead = (numberOrNull(usage.cacheRead) ?? 0);
+  const cacheWrite = (numberOrNull(usage.cacheWrite) ?? 0);
+  const orchestrationInput = (numberOrNull(orchestration.input) ?? 0);
+  const orchestrationOutput = (numberOrNull(orchestration.output) ?? 0);
+  const orchestrationCacheRead = (numberOrNull(orchestration.cacheRead) ?? 0);
   const measuredTokens = input + output + cacheRead + cacheWrite + orchestrationInput + orchestrationOutput + orchestrationCacheRead;
 
   return {
@@ -113,30 +114,33 @@ function extractCall(entry, file, rootFile, identity, cutoffMs) {
     orchestrationCacheRead,
     measuredTokens,
     premiumRequests: finite(usage.premiumRequests),
-    cost: normalizeCost(usage.cost),
-    costSource: "transcript",
+    transcriptCost: originalCost,
+    selectedCost: originalCost,
+    statsCost: null,
+    priceStatus: originalCost?.total === null || !originalCost ? "missing" : originalCost.total === 0 ? "explicit-zero" : "recorded",
+    cost: normalizeCost(originalCost),
+    explicitEntryId: typeof entry.id === "string" && Boolean(entry.id),
+    costSource: originalCost?.total != null ? "transcript" : "missing",
     content: message.content,
   };
 }
 
 function dedupeCalls(calls) {
-  const byKey = new Map();
+  const buckets = new Map();
   let duplicates = 0;
-  const depth = file => path.resolve(file).split(path.sep).filter(Boolean).length;
   for (const call of calls) {
-    const key = `${call.entryId}\u0000${call.statsTimestamp}`;
-    const existing = byKey.get(key);
-    if (!existing) {
-      byKey.set(key, call);
-      continue;
+    const key = `${call.provider}\u0000${call.model}\u0000${call.entryId}\u0000${call.statsTimestamp}\u0000${call.sourceDigest || call.sessionFile}`;
+    const bucket = buckets.get(key) || [];
+    const index = bucket.findIndex(existing => call.explicitEntryId && existing.explicitEntryId &&
+      (existing.transcriptId === call.transcriptId || existing.sessionFile === call.sessionFile));
+    if (index < 0) bucket.push(call);
+    else {
+      duplicates++;
+      if (call.sessionFile.split(path.sep).length < bucket[index].sessionFile.split(path.sep).length) bucket[index] = call;
     }
-    duplicates += 1;
-    // Forked/copied artifact trees can contain the same entry under a deeper
-    // path. Keep the shallowest transcript so owner/advisor attribution stays
-    // attached to the original session rather than a copied descendant.
-    if (depth(call.sessionFile) < depth(existing.sessionFile)) byKey.set(key, call);
+    buckets.set(key, bucket);
   }
-  return { calls: [...byKey.values()], duplicates };
+  return { calls: [...buckets.values()].flat(), duplicates };
 }
 
 export async function collectSessionData(sessionFile, pi, ctx, forceRefresh = false) {
@@ -150,6 +154,10 @@ export async function collectSessionData(sessionFile, pi, ctx, forceRefresh = fa
   const candidates = [rootSessionFile, ...await collectTranscriptsRecursive(transcriptStem(rootSessionFile))]
     .map(file => path.resolve(file));
 
+  const snapshot = await freezeFiles(candidates);
+  const indexer = createDiagnosticIndexer();
+  const scanFiles = [];
+  const activityTimeline = [];
   const valid = [];
   let skippedInvalidFiles = 0;
   for (const file of candidates) {
@@ -176,7 +184,10 @@ export async function collectSessionData(sessionFile, pi, ctx, forceRefresh = fa
   for (const transcript of valid) {
     const { file, identity } = transcript;
     const advisorCards = new Map();
-    await visitTranscript(file, entry => {
+    const descriptor = snapshot.descriptors.find(row => row.file === file);
+    const fileStats = await visitFrozen(descriptor, (entry, position) => {
+      const diagnosticEvent = indexer.accept(entry, file, identity, position);
+      if (diagnosticEvent) diagnosticEvent.inherited = cutoffMs > 0 && diagnosticEvent.timestamp > 0 && diagnosticEvent.timestamp < cutoffMs;
       const card = identity.agentType !== "advisor" ? customAdvisorCard(entry) : null;
       if (card) {
         const keys = new Set(card.notes.map(note => advisorKeyForNote(identity.agent, note.advisor, advisorDescriptors)));
@@ -187,6 +198,8 @@ export async function collectSessionData(sessionFile, pi, ctx, forceRefresh = fa
             eventKey: `${card.id || file}\u0000${eventTime}`,
             file,
             ownerAgent: identity.agent,
+            timestamp: eventTime,
+            recordKey: diagnosticEvent?.key,
             notes: card.notes,
           });
         }
@@ -201,6 +214,8 @@ export async function collectSessionData(sessionFile, pi, ctx, forceRefresh = fa
               eventKey: `${entry.id || file}\u0000${eventTime}`,
               file,
               advisorKey: identity.advisorKey,
+              timestamp: eventTime,
+              recordKey: diagnosticEvent?.key,
             });
           }
         }
@@ -213,6 +228,9 @@ export async function collectSessionData(sessionFile, pi, ctx, forceRefresh = fa
         return;
       }
 
+      attachCallFacts(call, diagnosticEvent);
+      call.sourceDigest = position.lineDigest;
+      if (!entry.id) call.entryId = diagnosticEvent?.entryId || call.entryId;
       if (identity.agentType === "advisor") {
         call.advisorToolEvents = toolCalls(call.content).map(tool => ({
           name: tool.name,
@@ -225,6 +243,7 @@ export async function collectSessionData(sessionFile, pi, ctx, forceRefresh = fa
       delete call.content;
       calls.push(call);
     });
+    scanFiles.push({ fileKey: indexer.fileKeys.get(file), localPath: file, sessionFormatVersion: transcript.header.version ?? null, frozenAt: descriptor.frozenAt, ...fileStats });
   }
 
   const canonicalEvents = events => {
@@ -236,7 +255,10 @@ export async function collectSessionData(sessionFile, pi, ctx, forceRefresh = fa
     }
     return [...map.values()];
   };
-  for (const event of canonicalEvents(reviewEvents)) activityFor(advisorActivity, event.advisorKey).reviewUpdates += 1;
+  for (const event of canonicalEvents(reviewEvents)) {
+    activityFor(advisorActivity, event.advisorKey).reviewUpdates += 1;
+    activityTimeline.push({ kind: "review", key: event.advisorKey, recordKey: event.recordKey, timestamp: event.timestamp });
+  }
   for (const event of canonicalEvents(deliveryEvents)) {
     const keys = new Set();
     for (const note of event.notes) {
@@ -245,8 +267,12 @@ export async function collectSessionData(sessionFile, pi, ctx, forceRefresh = fa
       const activity = activityFor(advisorActivity, key);
       activity.deliveredNotes += 1;
       activity.deliveredSeverity[severityKey(note.severity)] += 1;
+      activityTimeline.push({ kind: "note", key, recordKey: event.recordKey, timestamp: event.timestamp, severity: severityKey(note.severity) });
     }
-    for (const key of keys) activityFor(advisorActivity, key).deliveredCards += 1;
+    for (const key of keys) {
+      activityFor(advisorActivity, key).deliveredCards += 1;
+      activityTimeline.push({ kind: "card", key, recordKey: event.recordKey, timestamp: event.timestamp });
+    }
   }
 
   const deduped = dedupeCalls(calls);
@@ -263,15 +289,44 @@ export async function collectSessionData(sessionFile, pi, ctx, forceRefresh = fa
       }
     }
     for (const key of call.followupAdvisorKeys ?? []) activityFor(advisorActivity, key).primaryFollowupCalls += 1;
-    delete call.advisorToolEvents;
-    delete call.followupAdvisorKeys;
+    // These are normalized metadata, retained for filtered reports; no note text.
+    call.advisorToolEvents ??= [];
+    call.followupAdvisorKeys ??= [];
   }
   const pricing = await enrichCosts(deduped.calls, rootSessionFile, pi, ctx, forceRefresh);
 
+  let currentThinking = null;
+  try { currentThinking = pi?.getThinkingLevel?.() ?? null; } catch {}
+  let activeLeafId = null;
+  try { if (path.resolve(sessionFile) === rootSessionFile) activeLeafId = ctx?.sessionManager?.getLeafId?.() ?? null; } catch {}
+  const retained = new Set(deduped.calls.map(c => c.recordKey));
+  const canonicalEventMap = new Map();
+  for (const event of indexer.events) {
+    if (event.kind === "assistant" && event.usage?.carryingUsage && !retained.has(event.key)) continue;
+    const key = `${event.key}\u0000${event.sourceDigest}`;
+    if (!canonicalEventMap.has(key)) canonicalEventMap.set(key, event);
+  }
+  const events = [...canonicalEventMap.values()];
+  const manifest = deduped.calls.map(c => c.recordKey).sort();
+  const snapshotFacts = {
+    strategy: snapshot.strategy, startedAt: snapshot.startedAt, frozenAt: snapshot.frozenAt,
+    files: scanFiles, recordCount: manifest.length, recordManifestDigest: digest(manifest),
+    lastIncludedCallKey: deduped.calls.slice().sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0)).at(-1)?.recordKey || null,
+    atomic: false, activeLeafId, activeBranchAvailable: Boolean(activeLeafId && events.filter(e => e.agentType === "main" && e.entryId === activeLeafId).length === 1),
+    limitations: ["File prefixes are frozen sequentially, not atomically; later appends and files created after discovery are excluded.",
+      "Recorded spend is limited to this artifact tree; pre-fork inherited records are excluded using the documented timestamp cutoff.",
+      "In-place rewrites during an append cannot be completely ruled out without writer cooperation.",
+      "Recorded spend includes abandoned paths; active-main-path mode excludes descendants whose branch association is not proven."]
+  };
   return {
     rootSessionFile,
     sessionId: typeof rootHeader.id === "string" && rootHeader.id ? rootHeader.id : path.basename(transcriptStem(rootSessionFile)),
     calls: deduped.calls,
+    events,
+    graph: indexer.graph,
+    activityTimeline,
+    snapshot: snapshotFacts,
+    currentContext: { source: "export-time-only-not-historical", provider: ctx?.model?.provider ?? null, model: ctx?.model?.id ?? null, thinkingLevel: currentThinking },
     advisorActivity,
     advisorDescriptors,
     pricing,
@@ -283,10 +338,127 @@ export async function collectSessionData(sessionFile, pi, ctx, forceRefresh = fa
       excludedInheritedCalls,
       duplicateCallsRemoved: deduped.duplicates,
       cutoffMs,
+      invalidJson: scanFiles.reduce((n, f) => n + f.invalidJson, 0),
+      partialTails: scanFiles.reduce((n, f) => n + f.partialTail, 0),
+      oversizedLines: scanFiles.reduce((n, f) => n + f.oversizedLines, 0),
+      changedFiles: scanFiles.filter(f => f.changedDuringScan).length,
+      unavailableFiles: snapshot.descriptors.filter(f => f.unavailable).length + scanFiles.filter(f => f.unavailable).length,
+      missingTimestamps: events.filter(e => !e.timestamp).length,
     },
   };
 }
 
-export async function buildReport(sessionFile, pi = {}, ctx = {}, forceRefresh = false) {
-  return buildAggregates(await collectSessionData(sessionFile, pi, ctx, forceRefresh));
+export async function buildReport(sessionFile, pi = {}, ctx = {}, forceRefresh = false, options = {}) {
+  const report = buildAggregates(await collectSessionData(sessionFile, pi, ctx, forceRefresh));
+  return Object.keys(options).length ? scopeReport(report, options) : report;
+}
+
+export function selectionFilter(selection) {
+  const row = selection?.row;
+  if (!row) return {};
+  if (selection.kind === "Advisor") return { advisorKey: row.id };
+  if (row.modelId) return { modelId: row.modelId, agent: row.agent || row.name };
+  if (row.model && row.provider) return { modelId: `${row.provider}/${row.model}`, ...(row.agent ? { agent: row.agent } : {}) };
+  if (row.provider) return { provider: row.provider };
+  if (row.agent) return { agent: row.agent };
+  if (row.actorType) return { actorType: row.actorType };
+  return {};
+}
+
+export function scopeReport(report, options = {}) {
+  options = { ...(report._scopeOptions || {}), ...options };
+  const original = report._sourceScan;
+  if (!original) return report;
+  const allCalls = original.calls;
+  const allEvents = original.events || [];
+  let from = options.from ? parseTime(options.from) : 0;
+  let to = options.to ? parseTime(options.to) : 0;
+  if ((options.from && !from) || (options.to && !to) || (from && to && from >= to)) throw new Error("Invalid time range; use ISO timestamps, from inclusive and to exclusive.");
+  const eventBounds = {};
+  for (const [field, lower] of [["afterEvent", true], ["beforeEvent", false]]) {
+    if (!options[field]) continue;
+    const matches = allEvents.filter(e => e.key === options[field] || e.entryId === options[field]);
+    if (matches.length !== 1 || !matches[0].timestamp) throw new Error("Event boundary must identify exactly one timestamped event.");
+    eventBounds[field] = matches[0];
+    if (lower) from = matches[0].timestamp; else to = matches[0].timestamp;
+  }
+  if (from && to && from > to) throw new Error("Invalid event/time range.");
+  let activeKeys = null;
+  if (options.branch === "active-main-path") {
+    const leaf = original.snapshot?.activeLeafId;
+    const leafEvents = allEvents.filter(e => e.entryId === leaf && e.agentType === "main");
+    if (leafEvents.length !== 1) throw new Error("Active main leaf is unavailable or ambiguous; no active branch is inferred from file order.");
+    const event = leafEvents[0];
+    activeKeys = new Set();
+    let key = event.key;
+    while (key && !activeKeys.has(key)) { activeKeys.add(key); key = original.graph.get(key); }
+  }
+  const matchesActor = c => (!options.actorType || c.agentType === options.actorType) &&
+    (!options.agent || c.agent === options.agent) && (!options.advisorKey || c.advisorKey === options.advisorKey);
+  const matchesTime = c => {
+    const order = c.sequence ?? c.order;
+    const lower = eventBounds.afterEvent, upper = eventBounds.beforeEvent;
+    const above = lower && c.fileKey === lower.fileKey && order != null ? order > lower.order : !from || c.timestamp >= from;
+    const below = upper && c.fileKey === upper.fileKey && order != null ? order < upper.order : !to || c.timestamp < to;
+    return (!from && !to) || Boolean(c.timestamp && above && below);
+  };
+  const calls = allCalls.filter(c => matchesActor(c) && matchesTime(c) &&
+    (!options.provider || c.provider === options.provider) && (!options.modelId || `${c.provider}/${c.model}` === options.modelId) &&
+    (!activeKeys || (c.agentType === "main" && activeKeys.has(c.recordKey))) && !options.sinceKeys?.has(c.recordKey));
+  const callKeys = new Set(calls.map(c => c.recordKey));
+  const agents = new Set(calls.map(c => c.agent));
+  const events = allEvents.filter(e => !e.inherited && matchesTime(e) && matchesActor(e) &&
+    (!activeKeys || (e.agentType === "main" && activeKeys.has(e.key))) && !options.sinceEventKeys?.has(e.key) &&
+    ((!options.provider && !options.modelId) || agents.has(e.agent)) &&
+    (e.kind !== "assistant" || callKeys.has(e.key) || (!e.usage?.carryingUsage && (!options.provider || e.provider === options.provider) && (!options.modelId || `${e.provider}/${e.model}` === options.modelId))));
+  const eventKeys = new Set(events.map(e => e.key));
+  const relevantCalls = calls.map(c => ({ ...c, toolFacts: c.toolFacts?.map(t => ({ ...t,
+    result: t.result && eventKeys.has(t.result.eventKey) ? t.result : null })) }));
+  const activity = new Map();
+  // Advisor deliveries live in the OWNER transcript; do not discard them just
+  // because the selected actor is the advisor. Their own timeline is time-scoped.
+  const allowedAdvisorKeys = new Set();
+  for (const [key, descriptor] of original.advisorDescriptors || []) {
+    if (matchesActor(descriptor) && (!activeKeys || descriptor.ownerAgent === "main")) allowedAdvisorKeys.add(key);
+  }
+  for (const c of calls) if (c.agentType === "advisor") allowedAdvisorKeys.add(c.advisorKey);
+  if (options.provider || options.modelId) {
+    for (const key of allowedAdvisorKeys) if (!calls.some(c => c.advisorKey === key)) allowedAdvisorKeys.delete(key);
+  }
+  for (const e of original.activityTimeline || []) {
+    if (!matchesTime(e) || !allowedAdvisorKeys.has(e.key) || options.sinceEventKeys?.has(e.recordKey)) continue;
+    if (activeKeys && !activeKeys.has(e.recordKey)) continue;
+    const a = activityFor(activity, e.key);
+    if (e.kind === "review") a.reviewUpdates++;
+    if (e.kind === "note") { a.deliveredNotes++; a.deliveredSeverity[e.severity]++; }
+    if (e.kind === "card") a.deliveredCards++;
+  }
+  for (const c of relevantCalls) {
+    if (c.agentType === "advisor") {
+      const a = activityFor(activity, c.advisorKey);
+      for (const t of c.advisorToolEvents || []) {
+        if (t.name === "advise") { a.adviseCalls++; a.requestedSeverity[t.severity]++; } else a.otherToolCalls++;
+      }
+    }
+  }
+  // Direct follow-ups measure related primary records, not advisor usage.
+  for (const c of allCalls) {
+    if (!matchesTime(c) || options.sinceKeys?.has(c.recordKey) || (activeKeys && !activeKeys.has(c.recordKey))) continue;
+    for (const key of c.followupAdvisorKeys || []) if (allowedAdvisorKeys.has(key)) activityFor(activity, key).primaryFollowupCalls++;
+  }
+  // Older aggregate-only callers have no event index: preserve their recorded
+  // advisor activity, explicitly without inventing time filtering.
+  if (!original.activityTimeline && !from && !to && !options.sinceKeys) {
+    for (const [key, value] of original.advisorActivity || []) if (allowedAdvisorKeys.has(key)) activity.set(key, value);
+  }
+  const scoped = buildAggregates({ ...original, calls: relevantCalls, events,
+    advisorActivity: activity, contextEvents: original.events, scope: { ...options, sinceKeys: undefined, sinceEventKeys: undefined, from: from || null, to: to || null,
+      afterEventKey: eventBounds.afterEvent?.key || null, beforeEventKey: eventBounds.beforeEvent?.key || null,
+      branch: options.branch || "recorded-spend", denominator: "selected calls", selectedCalls: calls.length,
+      baselineExcluded: options.sinceKeys ? allCalls.filter(c => options.sinceKeys.has(c.recordKey)).length : 0,
+      missingTimeExcluded: from || to ? allCalls.filter(c => !c.timestamp).length : 0,
+      manifestDigest: digest([...callKeys].sort()) } });
+  Object.defineProperty(scoped, "_sourceScan", { value: original, configurable: true });
+  Object.defineProperty(scoped, "_scopeOptions", { value: options, configurable: true });
+  return scoped;
 }

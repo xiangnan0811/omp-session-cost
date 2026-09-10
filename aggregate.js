@@ -1,4 +1,6 @@
 import { finite } from "./format.js";
+import { VERSION } from "./version.js";
+import { analyzeEvents, summarizeCalls } from "./diagnostics.js";
 
 export function emptyTotals() {
   return {
@@ -226,8 +228,9 @@ export function buildAggregates(scan) {
   const advisors = sortedValues(advisorMap);
   const primaryAgents = agents.filter(row => row.agentType !== "advisor");
 
-  return {
-    version: "0.5.2",
+  const events = (scan.events || []).filter(e => !e.inherited);
+  const report = {
+    version: VERSION,
     generatedAt: Date.now(),
     sessionId: scan.sessionId,
     rootSessionFile: scan.rootSessionFile,
@@ -240,5 +243,14 @@ export function buildAggregates(scan) {
     advisors,
     metadata: scan.metadata,
     pricing: scan.pricing,
+    calls,
+    events,
+    snapshot: scan.snapshot || null,
+    scope: scan.scope || { branch: "recorded-spend", denominator: "selected calls", selectedCalls: calls.length },
+    currentContext: scan.currentContext || null,
+    diagnostics: analyzeEvents(calls, events, scan.contextEvents || scan.events || events),
+    measurement: summarizeCalls(calls, events.filter(e => e.kind === "assistant")),
   };
+  Object.defineProperty(report, "_sourceScan", { value: scan, configurable: true });
+  return report;
 }
