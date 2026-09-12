@@ -100,3 +100,32 @@ test("large excerpt previews are explicitly bounded and cannot silently copy unr
   assert.equal(copied, false); assert.match(v.toast, /save it for full review/);
   assert.equal(v.preview.payload.length, 240000, "only the preview is limited, never the payload");
 });
+
+test("new tasks/runtime/comparison tabs stay in the lower-half overlay at narrow widths", () => {
+  const v = make();
+  for (const tab of [6, 7, 8]) {
+    v.selectTab(tab);
+    for (const width of [32, 52, 80, 120]) {
+      const rendered = v.render(width);
+      assert.ok(rendered.length <= Math.floor(36 * .52));
+      assert.ok(rendered.every(line => textWidth(line) <= width));
+      assert.ok(rendered.join("\n").includes(["任务", "时序", "对比"][tab - 6]));
+    }
+  }
+});
+
+test("persistent baseline write failure does not claim success or replace an existing bookmark", async () => {
+  const prior = { name: "已有基线", callKeys: new Set(), eventKeys: new Set(), runtimeKeys: new Set() };
+  const v = make({ bookmark: prior, onBookmark: async () => { throw new Error("EACCES"); } });
+  await v.markSnapshot();
+  assert.equal(v.bookmark, prior); assert.match(v.toast, /失败|failed/);
+});
+
+test("original names and schema 3 are present in the frozen copy preview", () => {
+  const v = make(); v.openPreview("json");
+  const d = JSON.parse(v.preview.payload);
+  assert.equal(d.schemaVersion, 3); assert.equal(d.sessionId, "fixture-session");
+  assert.equal(d.privacy.agentNames, "preserved");
+  assert.ok(v.preview.payload.includes("Frontend"));
+  assert.ok(!v.preview.payload.includes('"Agent-3"'));
+});

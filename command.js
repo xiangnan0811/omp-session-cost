@@ -7,15 +7,17 @@ export function parseCostArgs(text = "") {
   const tokens = String(text).match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || [];
   for (const raw of tokens) {
     const token = raw.replace(/"([^\"]*)"|'([^']*)'/g, (_, a, b) => a ?? b);
-    if (["refresh", "mark", "since", "help"].includes(token)) result[token] = true;
+    if (["refresh", "mark", "since", "compare", "baselines", "help"].includes(token)) result[token] = true;
     else if (token === "main") result.options.actorType = "main";
     else if (token === "active") result.options.branch = "active-main-path";
     else if (token === "all") result.options.branch = "recorded-spend";
     else {
       const index = token.indexOf("=");
       const key = token.slice(0, index), value = token.slice(index + 1);
-      const fields = { from: "from", to: "to", after: "afterEvent", before: "beforeEvent", model: "modelId", provider: "provider", agent: "agent", actor: "actorType" };
+      if (["mark", "since", "compare"].includes(key) && value) { result[key] = true; result[`${key}Name`] = value; continue; }
+      const fields = { task: "taskKey", role: "role", phase: "phase", status: "status", from: "from", to: "to", after: "afterEvent", before: "beforeEvent", model: "modelId", provider: "provider", agent: "agent", actor: "actorType" };
       if (index <= 0 || !value || !fields[key]) throw new Error("Unknown /cost option. Use: refresh, main, all, active, mark, since, from=ISO, to=ISO, after=ID, before=ID, model=provider/id, provider=ID, agent=NAME.");
+      if (key === "status" && !["success", "error", "interrupted", "unknown"].includes(value)) throw new Error("status must be success, error, interrupted or unknown");
       if (key === "actor" && !["main", "subagent", "advisor"].includes(value)) throw new Error("actor must be main, subagent or advisor");
       result.options[fields[key]] = value;
     }

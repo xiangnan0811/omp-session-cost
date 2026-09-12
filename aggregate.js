@@ -1,3 +1,5 @@
+import { buildLedger } from "./ledger.js";
+import { buildTelemetry } from "./telemetry.js";
 import { finite } from "./format.js";
 import { VERSION } from "./version.js";
 import { analyzeEvents, summarizeCalls } from "./diagnostics.js";
@@ -232,7 +234,8 @@ export function buildAggregates(scan) {
   const report = {
     version: VERSION,
     generatedAt: Date.now(),
-    sessionId: scan.sessionId,
+    sessionId: scan.sessionId, sessionTitle: scan.sessionTitle || null,
+    ledger: buildLedger(scan), telemetry: buildTelemetry(scan), runtimeEvents: scan.runtimeEvents || [], runtimeCoverage: scan.runtimeCoverage || {}, runtimeFiles: scan.runtimeFiles || [],
     rootSessionFile: scan.rootSessionFile,
     total,
     actorTypes: sortedValues(actorMap),

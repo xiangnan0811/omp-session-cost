@@ -35,8 +35,8 @@ function view(callbacks = {}, done = () => {}, options = {}) {
   );
 }
 
-test("explorer exposes six agreed tabs", () => {
-  assert.deepEqual(TABS.map(tab => tab.label), ["Overview", "Providers", "Models", "Agents", "Advisors", "Details"]);
+test("explorer retains six existing tabs and adds task/runtime/comparison views", () => {
+  assert.deepEqual(TABS.map(tab => tab.label), ["Overview", "Providers", "Models", "Agents", "Advisors", "Details", "任务", "时序", "对比"]);
 });
 
 test("overview labels CALL%, TOK%, and COST% explicitly", () => {

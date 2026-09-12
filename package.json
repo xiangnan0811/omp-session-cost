@@ -1,7 +1,7 @@
 {
   "name": "omp-session-cost",
-  "version": "0.6.0",
-  "description": "An interactive oh-my-pi session cost explorer for providers, models, agents, and advisors.",
+  "version": "0.7.0",
+  "description": "OMP session cost, task attribution, passive runtime diagnostics, and named baselines with original names.",
   "type": "module",
   "license": "MIT",
   "author": "xiangnan0811",
@@ -46,7 +46,14 @@
     "diagnostics.js",
     "diagnostic-export.js",
     "command.js",
-    "docs/diagnostics.md"
+    "docs/diagnostics.md",
+    "semantic.js",
+    "ledger.js",
+    "runtime.js",
+    "telemetry.js",
+    "baseline.js",
+    "report-zh.js",
+    "advanced-pages.js"
   ],
   "scripts": {
     "check": "node scripts/check.mjs && node --test test/*.test.mjs",

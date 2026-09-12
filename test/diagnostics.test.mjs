@@ -65,7 +65,7 @@ test("530 usage records retain 528 nonzero responses and two zero interruptions;
   assert.equal(data.calls.length, 530);
   assert.equal(data.snapshot.atomic, false);
   assert.equal(data.scope.selectedCalls, report.total.calls);
-  assert.match(buildAiBrief(report), /Historical setting medium/);
+  assert.match(buildAiBrief(report), /历史设置 medium/);
 });
 
 test("actual effort is separate from history; request parameter evidence is not a model response inference", async () => {
@@ -159,7 +159,7 @@ test("timestamp/model/actor/selection filters share exact denominators and prese
   assert.equal(data.measurement.historicalSettings[0].value, "medium");
   assert.ok(data.events.find(e => e.kind === "thinking-setting").outsideSelectedRange);
   assert.equal(data.diagnostics.repeatedStatus.length, 0, "a preceding call outside range cannot be attributed as a repeat inside it");
-  assert.match(buildSelectionMarkdown(selected, { row: selected.primaryAgents[0], kind: "Main agent" }), /Usage records: 1/);
+  assert.match(buildSelectionMarkdown(selected, { row: selected.primaryAgents[0], kind: "Main agent" }), /1 条用量记录/);
   assert.throws(() => scopeReport(report, { from: "not a time" }), /Invalid time range/);
   assert.throws(() => scopeReport(report, { beforeEvent: "absent" }), /exactly one/);
 });
@@ -194,10 +194,11 @@ test("price enrichment retains transcript and database values and uses file-scop
   assert.equal(observedCost({}), null);
 });
 
-test("metadata default drops text/names/paths/thinking; evidence is bounded, redacted, explicitly untrusted", async () => {
+test("metadata preserves the original task title, excludes body/thinking, and bounds optional evidence", async () => {
   const a = assistant("a", "p", "m", { timestamp: time(1), content: [{ type: "thinking", thinking: "NEVER_EXPORT_THINKING secret" }, { type: "text", text: "Evidence sk-secretvalue123 /home/alice/private/project.txt https://private.internal/api?token=hidden alice@example.com password=hunter123" }] });
-  const report = await scan(chain([user("u", "SECRET_TASK_CONTENT", { timestamp: time(0) }), a]));
+  const report = await scan(chain([user("u", "原始任务标题\nSECRET_TASK_CONTENT", { timestamp: time(0) }), a]));
   const safe = buildPublicJson(report);
+  assert.match(safe, /原始任务标题/);
   assert.doesNotMatch(safe, /SECRET_TASK_CONTENT|NEVER_EXPORT_THINKING|sk-secretvalue|\/home\/alice|hunter123|private\.internal/);
   const detail = buildPublicJson(report, { includeEvidence: true });
   assert.match(detail, /SECRET_TASK_CONTENT/);
