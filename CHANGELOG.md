@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.8.0 - 2026-09-12
+
+- Replace narrow cost questions with comprehensive evidence-led analysis, including unanticipated issues and explicit uncertainty.
+- Unwrap the exact OMP task template; join allocated task-result IDs to originating tools; preserve ambiguous attribution instead of inventing lineage.
+- Separate parent identity from self, and aggregate all task buckets for a reused main instance. Add 80 metric/dimension conservation checks to diagnostic exports.
+- Expose per-instance collection windows, observed hooks, gap partitions and collector health. Avoid redundant unchanged health snapshots.
+- Separate Advisor context ingress, request observation, explicit disposition and unknown state. Preserve credential-redacted advice and out-of-range association evidence.
+- Add Markdown/JSON integrity envelopes, verifier CLI, native clipboard read-back and verified file writes. Unacknowledged transports are not reported as verified.
+- Move data quality and Advisor/runtime evidence before repetitive dimensions; full export retains all records. JSON contract is v4; sidecars remain v1.
+
 ## 0.7.0 - 2026-09-11
 
 - 直接保留原始 agent、角色、任务、阶段、模型与会话名称；不再使用匿名代理编号。

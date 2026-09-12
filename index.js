@@ -32,7 +32,7 @@ export default function costExplorerExtension(pi) {
       if (parsed.mark && (parsed.since || parsed.compare)) { ctx.ui.notify("保存基线与读取／比较基线请分别执行。", "error"); return; }
       ctx.ui.setStatus?.("omp-cost", "正在读取会话成本与诊断快照…");
       try {
-        await ctx.waitForIdle?.(); await observer.flush();
+        await ctx.waitForIdle?.(); await observer.flush(ctx);
         const root = await resolveInteractiveRoot(sessionFile);
         if (parsed.baselines) {
           const rows = await listBaselines(root);
@@ -70,12 +70,14 @@ export default function costExplorerExtension(pi) {
           onProfile: async profile => { await saveProfile(root, profile); profiles.set(root, profile); },
           onBookmark: async mark => { const saved = await saveBaseline(root, mark.baseline || makeBaseline(full, mark.name || DEFAULT_BASELINE)); bookmarks.set(root, saved); return saved; },
           onSave: (filename, payload) => saveReportFile(filename, payload, ctx.cwd),
-          onRefresh: async () => { await observer.flush(); full = await buildReport(sessionFile, pi, ctx, true); report = apply(full); return report; },
+          onRefresh: async () => { await observer.flush(ctx); full = await buildReport(sessionFile, pi, ctx, true); report = apply(full); return report; },
           onCopy: async (mode, copyContext) => {
             if (typeof copyContext.payload !== "string") throw new Error("复制内容必须来自冻结预览。");
             const result = await copyText(copyContext.payload);
-            ctx.ui.notify?.(`已通过 ${result.method} 复制${mode === "json" ? " JSON" : "中文分析报告"}。`, "info");
-            return { message: `已通过 ${result.method} 复制` };
+            const verified = result.verification === "readback-matched";
+            const message = verified ? `已通过 ${result.method} 复制并回读核对 ${result.bytes} 字节；接收端仍请核对完整性。` : `${result.method}：${result.warning}`;
+            ctx.ui.notify?.(message, verified ? "info" : "warning");
+            return { message };
           },
         }, done), COST_OVERLAY_OPTIONS);
       } catch (error) {

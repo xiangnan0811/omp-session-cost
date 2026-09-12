@@ -101,7 +101,7 @@ test("advisor delivery, request inclusion and explicit decisions are separate an
   await writeJsonl(root, [header("root", ts(0)), user("u", "任务", { timestamp: ts(1) }), advisorCard("card", [note], { parentId: "u", timestamp: ts(2) }), a, observation("decision", "a", 8, { kind: "advisor-decision", noteId: note.id, status: "accepted", actionId: "repair-task" })]);
   await writeJsonl(sidecarPath(root), [frame(root, "request-start", "start", 3, { requestId: "request", notes: noteFacts([note]) }), frame(root, "request-end", "end", 5, { requestId: "request", ...responseIdentity(a.message) })]);
   const r = await buildReport(root); assert.equal(r.telemetry.advisor.disposed, 1); assert.equal(r.telemetry.notes[0].deliveryToRequestMs, 1000); assert.equal(r.telemetry.notes[0].deliveryToDecisionMs, 6000);
-  const early = scopeReport(r, { to: ts(6) }); assert.equal(early.telemetry.advisor.disposed, 0); assert.equal(early.telemetry.advisor.blockerOpen, 1);
+  const early = scopeReport(r, { to: ts(6) }); assert.equal(early.telemetry.advisor.disposed, 0); assert.equal(early.telemetry.advisor.blockerOpen, 0); assert.equal(early.telemetry.advisor.dispositionUnknown, 1);
   assert.equal(early.telemetry.notes[0].actionId, null);
 }));
 
@@ -109,7 +109,7 @@ test("repeated identical advice has no invented occurrence linkage", async () =>
   const note = { severity: "blocker", note: "same" };
   await writeJsonl(root, [header("root", ts(0)), advisorCard("card1", [note], { timestamp: ts(1) }), advisorCard("card2", [note], { timestamp: ts(2) }), call("a", "card2", 5)]);
   await writeJsonl(sidecarPath(root), [frame(root, "request-start", "start", 3, { requestId: "request", notes: noteFacts([note]) })]);
-  const r = await buildReport(root); assert.equal(r.telemetry.advisor.requestObserved, 0); assert.equal(r.telemetry.advisor.open, 2);
+  const r = await buildReport(root); assert.equal(r.telemetry.advisor.requestObserved, 0); assert.equal(r.telemetry.advisor.open, 0); assert.equal(r.telemetry.advisor.dispositionUnknown, 2);
 }));
 
 test("review rounds and finding state transitions require IDs; future closure cannot leak backwards", async () => fixture(async (_dir, root) => {

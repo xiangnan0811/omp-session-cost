@@ -497,6 +497,7 @@ export function scopeReport(report, options = {}) {
       baselineExcluded: options.sinceKeys ? allCalls.filter(c => options.sinceKeys.has(c.recordKey)).length : 0,
       missingTimeExcluded: from || to ? allCalls.filter(c => !c.timestamp).length : 0,
       manifestDigest: digest([...callKeys].sort()) } });
+  if (report.observerStatus) scoped.observerStatus = report.observerStatus;
   Object.defineProperty(scoped, "_sourceScan", { value: original, configurable: true });
   Object.defineProperty(scoped, "_scopeOptions", { value: options, configurable: true });
   return scoped;

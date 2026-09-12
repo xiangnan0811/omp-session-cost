@@ -11,6 +11,20 @@ export function visibleText(content) {
   if (typeof content === "string") return content;
   return Array.isArray(content) ? content.filter(b => b?.type === "text" && typeof b.text === "string").map(b => b.text).join("\n") : "";
 }
+/** Strip only OMP's known outer task template, never arbitrary user headings. */
+export function assignmentText(value) {
+  const raw = String(value ?? "").trim();
+  return raw.replace(/^Complete assignment thoroughly:\r?\n\s*\r?\n/, "").trim();
+}
+export const assignmentHash = value => hash(assignmentText(value));
+export const assignmentTitle = value => titleOf(assignmentText(value));
+/** Preserve names and useful evidence; redact credential syntax, not paths or hosts. */
+export function evidenceText(value) {
+  return displayName(value, "").replace(/-----BEGIN [\s\S]*?PRIVATE KEY-----[\s\S]*?(?:-----END [\s\S]*?PRIVATE KEY-----|$)/g, "[REDACTED KEY]")
+    .replace(/\b(?:sk-[\w-]+|gh[pousr]_[\w]+|github_pat_[\w]+|AIza[\w-]+|eyJ[\w-]+\.[\w-]+\.[\w-]+)\b/g, "[REDACTED TOKEN]")
+    .replace(/\b(authorization|cookie|password|passwd|secret|api[_-]?key|access[_-]?token|refresh[_-]?token)["']?\s*[=:]\s*(?:["'][^"']*["']|[^\s,;]+)/gi, "$1=[REDACTED]")
+    .replace(/\bBearer\s+[^\s"']+/gi, "Bearer [REDACTED]");
+}
 export const titleOf = value => displayName(String(value ?? "").split(/\r?\n/).find(line => line.trim())?.trim(), "未记录任务标题");
 const string = value => typeof value === "string" && value.length > 0;
 
@@ -18,14 +32,15 @@ export function taskFacts(name, args, toolCallId) {
   if (name !== "task" || !args || typeof args !== "object") return [];
   return (Array.isArray(args.tasks) ? args.tasks : [args]).filter(t => t && typeof t === "object").map((t, index) => ({
     toolCallId, index, name: string(t.name) ? displayName(t.name) : null,
-    role: string(t.agent) ? displayName(t.agent) : null, title: string(t.task) ? titleOf(t.task) : null,
-    taskHash: string(t.task) ? hash(t.task) : null, source: "task-tool-arguments",
+    role: string(t.agent) ? displayName(t.agent) : null, title: string(t.task) ? assignmentTitle(t.task) : null,
+    taskHash: string(t.task) ? assignmentHash(t.task) : null, rawTaskHash: string(t.task) ? hash(t.task) : null, source: "task-tool-arguments",
   }));
 }
 
-export function noteFacts(notes, occurrence) {
+export function noteFacts(notes, occurrence, includeText = false) {
   return (Array.isArray(notes) ? notes : []).filter(n => n && typeof n === "object").map((n, i) => ({
     id: string(n.id) ? displayName(n.id) : occurrence ? `${occurrence}/note/${i + 1}` : null,
+    ...(includeText && typeof n.note === "string" ? { text: evidenceText(n.note), textSource: "advisor-delivery.note; credential-redacted; untrusted data" } : {}),
     explicitId: string(n.id), revision: string(n.revision) || typeof n.revision === "number" ? n.revision : null,
     advisor: displayName(n.advisor, "default"), severity: ["nit", "concern", "blocker"].includes(n.severity) ? n.severity : "nit",
     fingerprint: hash([n.advisor || "default", n.severity || "nit", n.note || ""]),
@@ -69,8 +84,8 @@ export function observeSemanticEntry(entry, event) {
   const message = entry.message || {};
   if (entry.type === "session_init") {
     event.kind = "session-init";
-    event.init = { role: string(entry.agent) ? displayName(entry.agent) : null, title: titleOf(entry.task),
-      taskHash: string(entry.task) ? hash(entry.task) : null, modelRole: string(entry.modelRole) ? displayName(entry.modelRole) : null,
+    event.init = { role: string(entry.agent) ? displayName(entry.agent) : null, title: assignmentTitle(entry.task),
+      taskHash: string(entry.task) ? assignmentHash(entry.task) : null, rawTaskHash: string(entry.task) ? hash(entry.task) : null, modelRole: string(entry.modelRole) ? displayName(entry.modelRole) : null,
       resolvedModel: string(entry.resolvedModel) ? displayName(entry.resolvedModel) : null,
       systemPromptHash: string(entry.systemPrompt) ? hash(entry.systemPrompt) : null, readOnly: typeof entry.readOnly === "boolean" ? entry.readOnly : null };
   }
@@ -80,14 +95,29 @@ export function observeSemanticEntry(entry, event) {
   if (entry.type === "model_usage") { event.purpose = displayName(entry.purpose, "unknown"); event.modelRole = string(entry.role) ? displayName(entry.role) : null; }
   const customType = entry.customType ?? message.customType;
   const data = entry.data ?? entry.details ?? message.details;
-  if (customType === "advisor") event.notes = noteFacts(data?.notes, event.key);
+  if (customType === "advisor") event.notes = noteFacts(data?.notes, event.key, true);
   if (customType === "omp-session-cost:observation") {
     event.workflow = workflowFact(data);
     if (event.workflow) event.kind = "workflow-observation";
   }
-  if (["toolResult", "tool_result"].includes(message.role)) event.observations = resultFacts(message.details);
+  if (["toolResult", "tool_result"].includes(message.role)) {
+    event.observations = resultFacts(message.details);
+    if (message.toolName === "task") event.taskResults = taskResultFacts(message.details);
+  }
   if (event.kind === "compaction") {
     event.tokensAfter = typeof entry.tokensAfter === "number" ? entry.tokensAfter : null;
     event.method = string(entry.method) ? displayName(entry.method) : null;
   }
+}
+
+/** OMP TaskToolDetails: no nested arbitrary result text is interpreted. */
+export function taskResultFacts(details) {
+  if (!details || typeof details !== "object") return [];
+  return [...(Array.isArray(details.results) ? details.results : []), ...(Array.isArray(details.progress) ? details.progress : [])]
+    .filter(r => r && string(r.id) && (string(r.agent) || string(r.task) || string(r.assignment)))
+    .map(r => ({ id: displayName(r.id), index: Number.isInteger(r.index) && r.index >= 0 ? r.index : null,
+      role: string(r.agent) ? displayName(r.agent) : null,
+      title: string(r.assignment ?? r.task) ? assignmentTitle(r.assignment ?? r.task) : null,
+      taskHash: string(r.assignment ?? r.task) ? assignmentHash(r.assignment ?? r.task) : null,
+      source: "task-result-allocated-id" }));
 }

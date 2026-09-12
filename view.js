@@ -415,6 +415,7 @@ export class CostExplorerView {
     ] : [];
     this.preview.scopeLabel = this.preview.scope;
     this.preview.bytes = Buffer.byteLength(this.preview.payload, "utf8");
+    this.preview.summaryLines.push(`报告 ${this.preview.bytes} UTF-8 bytes；含完整性校验与结束标记。源数据缺口仍须单独核验。`, "默认包含任务标题和 Advisor 建议内容（凭据脱敏），复制或保存前请预览。大报告可按 s 保存完整文件。");
     this.preview.wrapCache = null;
     this.modalOffset = 0;
     this.requestRender();

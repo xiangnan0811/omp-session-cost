@@ -1,4 +1,5 @@
 import path from "node:path";
+import { collectionCoverage } from "./report-contract.js";
 import { distribution } from "./diagnostics.js";
 import { responseIdentity, RUNTIME_SCHEMA } from "./runtime.js";
 import { measure, measuredGroups } from "./ledger.js";
@@ -14,7 +15,7 @@ export function intervalUnion(intervals) {
   }
   return total + (start === null ? 0 : end - start);
 }
-const kinds = new Set(["observer-start", "configuration-files", "system-prompt-observed", "agent-start", "agent-end", "turn-start", "context-notes", "request-start", "request-end", "request-unclosed", "assistant-message-start", "response-headers", "first-output", "tool-start", "tool-end", "approval-start", "approval-end", "compaction-start", "compaction-end", "auto-retry-start", "auto-retry-end", "subagent-lifecycle", "workflow"]);
+const kinds = new Set(["observer-start", "observer-status", "configuration-files", "system-prompt-observed", "agent-start", "agent-end", "turn-start", "context-notes", "request-start", "request-end", "request-unclosed", "assistant-message-start", "response-headers", "first-output", "tool-start", "tool-end", "approval-start", "approval-end", "compaction-start", "compaction-end", "auto-retry-start", "auto-retry-end", "subagent-lifecycle", "workflow"]);
 export async function readRuntime(descriptors, transcripts) {
   const identity = new Map(transcripts.map(t => [path.resolve(t.file), t.identity]));
   const events = [], files = []; let invalid = 0;
@@ -130,20 +131,28 @@ export function buildTelemetry(scan) {
     generationByContent.get(k).push(g);
   }
   const uniqueNotes = unique(delivered, n => `${n.owner}\u0000${n.fingerprint}`);
+  const byExplicitNoteId = unique(delivered, n => `${n.owner}\u0000${n.id}`);
+  const noteKey = n => `${n.owner}\u0000${n.eventKey}\u0000${n.id}`;
   const noteRequest = new Map(), noteContext = new Map();
-  for (const f of all.filter(f => f.kind === "request-start" && selectedFrames.has(f.id)).sort(timeSort)) {
-    for (const [list, target] of [[f.notes || [], noteRequest], [byId.get(f.contextId)?.notes || [], noteContext]]) {
-      const counts = new Map(); for (const n of list) counts.set(n.fingerprint, (counts.get(n.fingerprint) || 0) + 1);
-      for (const n of list) {
-        const delivery = uniqueNotes.get(`${f.agent}\u0000${n.fingerprint}`);
-        if (counts.get(n.fingerprint) === 1 && delivery?.deliveredAt && f.timestamp >= delivery.deliveredAt && !target.has(delivery.id)) target.set(delivery.id, f);
-      }
+  function observeNotes(f, list, target) {
+    const identity = n => n.explicitId ? `id:${n.id}` : `content:${n.fingerprint}`;
+    const counts = new Map(); for (const n of list) counts.set(identity(n), (counts.get(identity(n)) || 0) + 1);
+    for (const n of list) {
+      const delivery = n.explicitId ? byExplicitNoteId.get(`${f.agent}\u0000${n.id}`) : uniqueNotes.get(`${f.agent}\u0000${n.fingerprint}`);
+      if (counts.get(identity(n)) === 1 && delivery?.deliveredAt && delivery.fingerprint === n.fingerprint && f.timestamp >= delivery.deliveredAt && !target.has(noteKey(delivery))) target.set(noteKey(delivery), f);
     }
   }
-  const notes = delivered.filter(n => selectedEvents.has(n.eventKey) || (noteRequest.has(n.id) && selectedFrames.has(noteRequest.get(n.id).id))).map(n => {
-    const req = noteRequest.get(n.id), context = noteContext.get(n.id);
+  // Context ingress is evidence in its own right, even without a provider hook.
+  for (const f of all.filter(f => f.kind === "context-notes" && selectedFrames.has(f.id)).sort(timeSort)) observeNotes(f, f.notes || [], noteContext);
+  for (const f of all.filter(f => f.kind === "request-start" && selectedFrames.has(f.id)).sort(timeSort)) {
+    observeNotes(f, f.notes || [], noteRequest);
+    const context = byId.get(f.contextId);
+    if (context) observeNotes(context, context.notes || [], noteContext);
+  }
+  const notes = delivered.filter(n => selectedEvents.has(n.eventKey) || (noteRequest.has(noteKey(n)) && selectedFrames.has(noteRequest.get(noteKey(n)).id)) || (noteContext.has(noteKey(n)) && selectedFrames.has(noteContext.get(noteKey(n)).id))).map(n => {
+    const req = noteRequest.get(noteKey(n)), context = noteContext.get(noteKey(n));
     const decisions = workflow.filter(w => w.selected && w.kind === "advisor-decision" && w.agent === n.owner && w.timestamp >= n.deliveredAt &&
-      (w.noteId === n.id || (uniqueNotes.get(`${n.owner}\u0000${n.fingerprint}`) && w.noteFingerprint === n.fingerprint)));
+      ((w.noteId === n.id && byExplicitNoteId.get(`${n.owner}\u0000${n.id}`) === n) || (uniqueNotes.get(`${n.owner}\u0000${n.fingerprint}`) && w.noteFingerprint === n.fingerprint)));
     const first = decisions[0], last = decisions.at(-1);
     const matches = (generationByContent.get(`${n.owner}\u0000${n.contentHash}`) || []).filter(g => g.generatedAt <= n.deliveredAt);
     const source = n.contentHash && matches.length === 1 && delivered.filter(d => d.owner === n.owner && d.contentHash === n.contentHash).length === 1 ? matches[0] : null;
@@ -190,14 +199,14 @@ export function buildTelemetry(scan) {
       window: "up to five non-helper calls each side, bounded by selection and adjacent compactions", netSavings: null, qualityImpact: "not-measured" };
   });
   const referenced = new Set([...requests, ...spans, ...notes, ...reviews, ...compactions].flatMap(x => x.evidence || []));
-  const evidence = all.filter(f => selectedFrames.has(f.id) || referenced.has(f.id)).map(f => ({ ...f, outsideSelectedRange: !selectedFrames.has(f.id) }));
-  return { coverage: { ...scan.runtimeCoverage, selectedFrames: frames.length, selectedCalls: calls.length, measuredRequests: requests.filter(r => r.durationMs !== null).length,
+  const evidence = all.filter(f => selectedFrames.has(f.id) || referenced.has(f.id) || (["observer-start", "observer-status"].includes(f.kind) && calls.some(c => c.sessionFile === f.sourceFile))).map(f => ({ ...f, outsideSelectedRange: !selectedFrames.has(f.id) }));
+  return { coverage: { ...scan.runtimeCoverage, collectors: collectionCoverage(calls, all, requests), selectedFrames: frames.length, selectedCalls: calls.length, measuredRequests: requests.filter(r => r.durationMs !== null).length,
       unmatchedEnds: frames.filter(f => f.kind === "request-end" && !f.callKey).length, source: all.length ? "passive-runtime-plus-transcript" : "transcript-only; runtime not collected historically" },
     requests, requestDuration: distribution(requests.map(r => r.durationMs)), firstOutput: distribution(requests.map(r => r.firstOutputMs)),
     responseHeaders: distribution(requests.map(r => r.responseHeadersMs)), spans, waits, notes,
-    advisor: { generationLinked: notes.filter(n => n.generatedAt !== null).length, generationToDelivery: distribution(notes.map(n => n.generationToDeliveryMs)), delivered: notes.length, requestObserved: notes.filter(n => n.requestObservedAt).length, disposed: notes.filter(n => n.decisionAt).length,
-      open: notes.filter(n => !n.decisionAt).length, blockers: notes.filter(n => n.severity === "blocker").length, blockerAwaitingDisposition: notes.filter(n => n.severity === "blocker" && !n.decisionAt).length,
-      blockerOpen: notes.filter(n => n.severity === "blocker" && !["resolved", "closed", "dismissed", "rejected", "obsolete", "superseded"].includes(n.disposition)).length,
+    advisor: { generationLinked: notes.filter(n => n.generatedAt !== null).length, generationToDelivery: distribution(notes.map(n => n.generationToDeliveryMs)), delivered: notes.length, contextObserved: notes.filter(n => n.contextAt !== null).length, requestObserved: notes.filter(n => n.requestObservedAt).length, disposed: notes.filter(n => n.decisionAt).length,
+      dispositionUnknown: notes.filter(n => !n.decisionAt).length, open: notes.filter(n => ["open", "pending", "in-progress", "accepted"].includes(n.disposition)).length, blockers: notes.filter(n => n.severity === "blocker").length, blockerAwaitingDisposition: notes.filter(n => n.severity === "blocker" && !n.decisionAt).length,
+      blockerOpen: notes.filter(n => n.severity === "blocker" && ["open", "pending", "in-progress", "accepted"].includes(n.disposition)).length,
       deliveryToRequest: distribution(notes.map(n => n.deliveryToRequestMs)), deliveryToDecision: distribution(notes.map(n => n.deliveryToDecisionMs)) },
     reviews, compactions, helperUsage: measuredGroups(calls.filter(c => c.purpose), c => `${c.agent} / ${c.purpose} / ${c.provider}/${c.model}`),
     configuration: { events: frames.filter(f => ["configuration-files", "system-prompt-observed"].includes(f.kind)),

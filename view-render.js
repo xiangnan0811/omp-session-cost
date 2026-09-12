@@ -180,7 +180,7 @@ export function modalRows(view) {
       if (truncated) p.wrapCache.rows.push(view.detail("PREVIEW LIMIT: only the first 100,000 characters / 5,000 wrapped rows are shown. The complete payload is unchanged. Save for full review; excerpt-mode clipboard is disabled.", 0, "warning"));
     }
     return [view.heading(`${view.modal === "subject" ? "SUBJECT DIAGNOSTICS" : "COPY PREVIEW"} · ${p.scopeLabel} · ${p.calls} calls · ${p.bytes} bytes`),
-      view.detail(p.includeEvidence ? "EXCERPTS ON: review every excerpt; automatic redaction is not a guarantee." : "原始名称、任务首行与事实元数据；e 可附加日志片段。", 0, p.includeEvidence ? "warning" : "muted"),
+      view.detail(p.includeEvidence ? "EXCERPTS ON: review every excerpt; automatic redaction is not a guarantee." : "含原始名称、任务标题、Advisor 正文与事实证据；凭据脱敏，e 可附加日志片段。", 0, p.includeEvidence ? "warning" : "muted"),
       view.detail("f scope · g question · p protected scope · n annotation · Enter copy · s save", 0),
       ...(view.modal === "subject" ? [...p.summaryLines.map(line => view.detail(line, 0, "text")), view.separator()] : []),
       ...p.wrapCache.rows];

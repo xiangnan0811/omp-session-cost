@@ -1,4 +1,4 @@
-# 诊断格式 v3
+# 诊断格式 v4
 
 ## 身份与统计口径
 
@@ -65,3 +65,22 @@ pi.events.emit("omp-session-cost:observation", {
 基线保存在 `<root>.cost-state/baselines/<name-hash>.json`，原名存入内容，文件名哈希不用于匿名化报告。保存采用临时文件、同步和原子 rename。基线保存历史价格与记录身份；对比侧为当前范围内新增记录，不是两段工作量相等的实验。
 
 缺失原因区分未采集、未关联／共享、解析器不支持、范围外、未选入片段。历史未采集的运行时信息不会从当前配置倒推。范围外但用于解释完整区间的已知起点会显式标注 `outsideSelectedRange`。
+
+
+## v4 数据与传输契约（0.8.0）
+
+`analysisContext.policy` 始终保留全面诊断要求；用户保存的 question 是额外关注点，不自动覆盖全面诊断范围。插件不改模型配置、独立审查或等待规则。
+
+`session_init.task` 只移除 OMP 已知的 `Complete assignment thoroughly:` 外层模板，再与原始 task 参数作规范化哈希关联。`TaskToolDetails.results/progress` 的实际 `id` 通过原始 toolCallId 回到发起调用，不用工具返回时间抢占后来任务。只保留名称／正文候选时可能出现歧义；多候选不被虚称为已证实的跨任务共享。文件层级父实例、委派工具、具体任务归属是三个不同层次的证据。
+
+`ledger.instances[].taskAssignments` 展示实例的全部任务桶。`ledger.reconciliation.checks` 检查任务、时间窗口、实例、角色模型四维度的调用、Token 和金额；`dataQuality.conservation` 还检查展示总计和主体／提供商／模型三维度。分组相加不应重复计算明细表。
+
+`telemetry.coverage.collectors` 记录逐实例首次／最后观察、来源、开始事件、实际收到的 hook 计数、健康记录及互斥缺口分类。观察范围不是连续在线时长；钩子注册不证明钩子可用或被调用。未采集请求可能发生在加载之前、观察范围之外、缺少请求事件或无法唯一关联，不能从零样本判定具体根因。健康计数是采集进程累计值，不累加快照；无变化的 flush 不重复写健康记录。当前进程的写入失败即使无法落盘，仍在 `observerStatus` 中报告。
+
+Advisor 的 `dispositionUnknown` 是缺少明确处置；`open`/`blockerOpen` 只计明确 open/pending/in-progress/accepted 状态。接受不等于修复完成。`contextObserved` 和 `requestObserved` 各自独立计量，精确 occurrence ID 优先于唯一内容匹配；重复内容没有标识时不造关联。默认携带凭据脱敏的建议正文，不写入或导出完整供应商请求、系统提示或思考内容。格式字段语义与 v3 不完全相同，消费者应核对 schemaVersion=4。
+
+Markdown 首尾完整性标记验证 LF 规范化后的正文 UTF-8 字节数和 SHA-256。JSON 验证移除 integrity 字段、保留插入顺序后 JSON.stringify 的字节数与哈希，漂亮缩进不影响校验。`scripts/verify-report.mjs` 退出码 0 表示完整，1 表示校验失败，2 表示无法读取或参数错误。它不能把来源缺失变成完整数据。终端 OSC 52 没有回执；本地剪贴板回读成功也不保证另一应用在粘贴时不截断，接收端应再次核验。
+
+回归使用合成日志，不提交真实会话。上游契约核对：
+- https://github.com/can1357/oh-my-pi/blob/f97fa5c95010b62ac34c7357f9a1cae6975e12d6/packages/coding-agent/src/prompts/system/subagent-user-prompt.md
+- https://github.com/can1357/oh-my-pi/blob/f97fa5c95010b62ac34c7357f9a1cae6975e12d6/packages/coding-agent/src/task/types.ts

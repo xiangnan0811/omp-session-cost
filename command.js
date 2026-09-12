@@ -30,7 +30,8 @@ export async function saveReportFile(filename, payload, cwd = process.cwd()) {
   if (typeof payload !== "string") throw new TypeError("Report payload must be text.");
   const target = path.resolve(cwd, filename.trim());
   const handle = await fs.open(target, "wx", 0o600);
-  try { await handle.writeFile(payload, "utf8"); }
+  try { await handle.writeFile(payload, "utf8"); await handle.sync(); }
   finally { await handle.close(); }
-  return { message: `Saved ${Buffer.byteLength(payload, "utf8")} bytes to ${target}; file mode 0600`, path: target };
+  if ((await fs.readFile(target, "utf8")) !== payload) throw new Error("Saved file verification failed; do not treat it as a complete report.");
+  return { message: `Saved and read-back verified ${Buffer.byteLength(payload, "utf8")} bytes to ${target}; file mode 0600`, path: target };
 }

@@ -33,11 +33,12 @@ export function taskRows(view, width) {
 export function runtimeRows(view) {
   const r = view.report.telemetry;
   const rows = [view.heading("时序 · 请求 / 等待 / Advisor / 审查 / 压缩"), view.detail(`请求时长覆盖 ${r?.coverage?.measuredRequests || 0}/${view.report.total.calls}；历史未采集数据不能补造。`, 0)];
+  for (const c of r?.coverage?.collectors || []) rows.push(view.detail(`${c.agent}: ${c.reasons.measured}/${c.calls} 已测；首次观察 ${c.firstObservedAt ? formatTimestamp(c.firstObservedAt) : "未记录"}`, 0), view.detail(`缺口：${JSON.stringify(c.reasons)}`));
   for (const [name, d] of [["请求到结束", r?.requestDuration], ["请求到首个输出", r?.firstOutput], ["请求到响应头", r?.responseHeaders]])
     rows.push(view.detail(`${name} ms: P50 ${ms(d?.p50)} / P95 ${ms(d?.p95)} / max ${ms(d?.max)} (${d?.samples || 0})`, 0));
   rows.push(view.detail("时长包含网络与运行时；并行 agent 时间不能直接相加。", 0));
   for (const x of r?.waits || []) rows.push(view.heading(x.agent), view.detail(`工具时间并集 ${ms(x.unionMs)} ms`, 0), ...x.categories.map(c => view.detail(`${c.category}: ${c.count} 次 / ${ms(c.unionMs)} ms`)));
-  rows.push(view.separator(), view.heading("Advisor 明确关联"), view.detail(`交付 ${r?.advisor?.delivered || 0} · 请求观察 ${r?.advisor?.requestObserved || 0} · 明确处置 ${r?.advisor?.disposed || 0} · blocker 未闭合 ${r?.advisor?.blockerOpen || 0}`, 0));
+  rows.push(view.separator(), view.heading("Advisor 明确关联"), view.detail(`交付 ${r?.advisor?.delivered || 0} · 请求观察 ${r?.advisor?.requestObserved || 0} · 明确处置 ${r?.advisor?.disposed || 0} · 处置未知 ${r?.advisor?.dispositionUnknown || 0} · blocker 明确未闭合 ${r?.advisor?.blockerOpen || 0}`, 0));
   for (const x of r?.notes || []) rows.push(view.detail(`${x.advisor} → ${x.owner} / ${x.severity} / ${x.disposition}`, 0), view.detail(`ID ${x.id}；交付到请求 ${ms(x.deliveryToRequestMs)} ms`));
   rows.push(view.separator(), view.heading("审查轮次与问题账本"));
   for (const x of r?.reviews || []) rows.push(view.detail(`${x.name} / ${x.agent} / ${x.phase || "阶段未记录"} / ${formatCost(x.costTotal)}`, 0), ...x.findings.map(f => view.detail(`${f.id} ${f.name}: ${f.status}`)));

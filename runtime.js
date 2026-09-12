@@ -3,7 +3,7 @@ import path from "node:path";
 import os from "node:os";
 import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
-import { hash, displayName, titleOf, noteFacts, resultFacts, workflowFact } from "./semantic.js";
+import { hash, displayName, titleOf, assignmentTitle, noteFacts, resultFacts, workflowFact } from "./semantic.js";
 import { VERSION } from "./version.js";
 
 export const RUNTIME_SCHEMA = 1;
@@ -74,7 +74,7 @@ export function createRuntimeObserver(pi, options = {}) {
   function stateFor(file, ctx, sink = file) {
     if (!file) return null;
     let s = states.get(file);
-    if (!s) { s = { file, sink, ctx, request: null, context: null, promptHash: null, configHash: null, compactId: null }; states.set(file, s); }
+    if (!s) { s = { file, sink, ctx, request: null, context: null, promptHash: null, configHash: null, compactId: null, observedHooks: {}, started: false }; states.set(file, s); }
     if (ctx) s.ctx = ctx;
     return s;
   }
@@ -89,6 +89,22 @@ export function createRuntimeObserver(pi, options = {}) {
       .finally(() => { queued--; });
     return frame;
   }
+  function start(s, trigger) {
+    if (s && !s.started) { s.started = true; s.firstObservedAt = now(); record(s, "observer-start", { hooks: HOOKS, trigger }); }
+  }
+  async function flush(ctx) {
+    if (ctx) {
+      const s = stateFor(ctx.sessionManager?.getSessionFile?.(), ctx);
+      start(s, "cost-snapshot");
+    }
+    await chain;
+    for (const s of states.values()) {
+      const health = { observedHooks: { ...s.observedHooks }, firstObservedAt: s.firstObservedAt || null, dropped, errors: errors.slice(), scope: "collector-process cumulative counters; do not sum snapshots" };
+      const fingerprint = hash(health);
+      if (s.healthHash !== fingerprint) { record(s, "observer-status", health); s.healthHash = fingerprint; }
+    }
+    await chain;
+  }
   async function config(s) {
     const files = await observeConfig(s.ctx?.cwd), fingerprint = hash(files);
     if (fingerprint !== s.configHash) { record(s, "configuration-files", { files, fingerprint }); s.configHash = fingerprint; }
@@ -97,8 +113,10 @@ export function createRuntimeObserver(pi, options = {}) {
     const s = childState || stateFor(ctx?.sessionManager?.getSessionFile?.(), ctx);
     if (!s) return;
     if (!childState) current = s;
+    start(s, event.type);
+    s.observedHooks[event.type] = (s.observedHooks[event.type] || 0) + 1;
     switch (event.type) {
-      case "session_start": case "session_switch": record(s, "observer-start", { hooks: HOOKS }); await config(s); break;
+      case "session_start": case "session_switch": await config(s); break;
       case "before_agent_start":
         if (event.systemPrompt) { const fingerprint = hash(event.systemPrompt); if (s.promptHash !== fingerprint) record(s, "system-prompt-observed", { fingerprint, source: "before_agent_start input; may be modified by later extensions" }); s.promptHash = fingerprint; }
         await config(s); break;
@@ -186,7 +204,7 @@ export function createRuntimeObserver(pi, options = {}) {
     const child = stateFor(data.sessionFile, null, parent.sink); if (data.progress?.id) registerChild(data.progress.id, child);
     const fingerprint = hash([data.agent, data.task, data.parentToolCallId, data.assignment]);
     if (child.progressHash === fingerprint) return; child.progressHash = fingerprint;
-    record(parent, "subagent-lifecycle", { childFile: data.sessionFile, name: text(data.progress?.id), role: text(data.agent), title: typeof data.task === "string" ? titleOf(data.task) : null, parentToolCallId: text(data.parentToolCallId), status: "progress", assignment: text(data.assignment) });
+    record(parent, "subagent-lifecycle", { childFile: data.sessionFile, name: text(data.progress?.id), role: text(data.agent), title: typeof data.task === "string" ? assignmentTitle(data.task) : null, parentToolCallId: text(data.parentToolCallId), status: "progress", assignment: text(data.assignment) });
   });
   listen("task:subagent:event", data => {
     const s = children.get(data?.id); if (!s || !data.event) return;
@@ -198,6 +216,6 @@ export function createRuntimeObserver(pi, options = {}) {
     const s = data?.sessionFile ? states.get(data.sessionFile) : current;
     if (observation && s) record(s, "workflow", { observation });
   });
-  return { handle, flush: async () => { await chain; }, status: () => ({ queued, dropped, errors: errors.slice(), hooks: HOOKS }),
+  return { handle, flush, status: () => ({ runId, queued, dropped, errors: errors.slice(), hooks: HOOKS }),
     dispose: () => { for (const remove of removers.splice(0)) { try { remove(); } catch {} } } };
 }

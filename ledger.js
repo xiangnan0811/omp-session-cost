@@ -1,6 +1,7 @@
 import path from "node:path";
 import { summarizeCalls, distribution } from "./diagnostics.js";
 import { displayName } from "./semantic.js";
+import { transcriptStem } from "./transcript.js";
 
 export const SHARED_TASK = "shared/unattributed";
 const add = (a, n) => a + (typeof n === "number" && Number.isFinite(n) ? n : 0);
@@ -39,7 +40,22 @@ export function attributeScan(scan) {
     if (e.kind === "session-init") Object.assign(instances.get(e.transcriptId), e.init, { initEventKey: e.key, roleSource: e.init.role ? "session_init.agent" : "not-recorded" });
   }
   const byFile = new Map();
-  for (const c of calls) if (instances.has(c.transcriptId)) byFile.set(c.sessionFile, instances.get(c.transcriptId));
+  for (const c of calls) if (instances.has(c.transcriptId)) {
+    const instance = instances.get(c.transcriptId);
+    instance.file = path.resolve(c.sessionFile); byFile.set(instance.file, instance);
+  }
+  const byStem = new Map([...byFile].map(([file, instance]) => [transcriptStem(file), instance]));
+  for (const instance of instances.values()) {
+    if (!instance.file || instance.actorType === "main") continue;
+    const parent = byStem.get(path.dirname(instance.file));
+    if (parent && parent.id !== instance.id) {
+      instance.parentAgent = parent.name; instance.parentInstanceId = parent.id;
+      instance.parentSource = "transcript-directory";
+    }
+    if (instance.actorType === "advisor" && !instance.parentAgent) {
+      instance.parentAgent = instance.owner; instance.parentSource = "advisor-owner";
+    }
+  }
   for (const f of frames.filter(f => f.kind === "subagent-lifecycle")) {
     const childFile = f.childFile || f.targetSessionFile;
     const instance = childFile ? byFile.get(path.resolve(childFile)) : null;
@@ -62,12 +78,35 @@ export function attributeScan(scan) {
   const parents = new Map();
   for (const instance of instances.values()) {
     if (instance.actorType !== "subagent") continue;
-    const hierarchy = instance.name.split(" > "), leaf = hierarchy.pop(), parentName = hierarchy.join(" > ") || "main";
-    const candidates = delegations.filter(d => instance.parentToolCallId ?
-      d.toolCallId === instance.parentToolCallId && d.parentAgent === instance.parentAgent && (!d.name || [leaf, instance.runtimeName].includes(d.name)) :
-      d.parentAgent === parentName && (d.name ? [leaf, instance.runtimeName].includes(d.name) : Boolean(instance.taskHash && d.taskHash === instance.taskHash)));
-    if (!candidates.length && instance.parentToolCallId) for (const t of tools)
-      if (t.id === instance.parentToolCallId && t.parentAgent === instance.parentAgent) candidates.push(t);
+    const hierarchy = instance.name.split(" > "), leaf = hierarchy.pop();
+    const parentName = instance.parentAgent || hierarchy.join(" > ") || "main";
+    const allocatedName = instance.file ? path.basename(transcriptStem(instance.file)) : leaf;
+    const parentTools = tools.filter(t => instance.parentInstanceId ? t.transcriptId === instance.parentInstanceId : t.parentAgent === parentName);
+    const parentDelegations = delegations.filter(d => instance.parentInstanceId ? d.transcriptId === instance.parentInstanceId : d.parentAgent === parentName);
+    // Task results retain the allocated output ID even when OMP generated or normalized the requested name.
+    const fromResults = events.flatMap(e => {
+      const tool = parentTools.find(t => t.id && t.id === e.toolCallId && t.transcriptId === e.transcriptId);
+      if (!tool) return [];
+      return (e.taskResults || []).filter(r => r.id === allocatedName).map(r => ({ ...r, toolCallId: tool.id,
+        eventKey: tool.eventKey, evidence: [tool.eventKey, e.key], parentAgent: tool.parentAgent,
+        transcriptId: tool.transcriptId, phaseKey: tool.phaseKey, match: "task-result-allocated-id" }));
+    });
+    let candidates = fromResults;
+    if (!candidates.length && instance.parentToolCallId) {
+      candidates = parentDelegations.filter(d => d.toolCallId === instance.parentToolCallId &&
+        (!d.name || [leaf, instance.runtimeName].includes(d.name) || (instance.taskHash && d.taskHash === instance.taskHash)));
+      if (!candidates.length) candidates = parentTools.filter(t => t.id === instance.parentToolCallId);
+      candidates = candidates.map(d => ({ ...d, match: "runtime-parent-tool" }));
+    }
+    if (!candidates.length) {
+      const hashes = parentDelegations.filter(d => instance.taskHash && d.taskHash === instance.taskHash && (!instance.role || !d.role || instance.role === d.role));
+      candidates = hashes.length ? hashes.map(d => ({ ...d, match: "normalized-assignment-hash" })) :
+        parentDelegations.filter(d => d.name && [leaf, instance.runtimeName].includes(d.name)).map(d => ({ ...d, match: "exact-requested-name" }));
+    }
+    candidates = [...new Map(candidates.map(d => [JSON.stringify([d.eventKey, d.toolCallId || d.id, d.index]), d])).values()];
+    const parentToolIds = [...new Set(candidates.map(d => d.toolCallId || d.id).filter(Boolean))];
+    if (!instance.parentToolCallId && parentToolIds.length === 1) instance.parentToolCallId = parentToolIds[0];
+    instance.delegationMatches = [...new Set(candidates.map(d => d.match))];
     if (!instance.role) {
       const roles = [...new Set(candidates.map(c => c.role).filter(Boolean))];
       if (roles.length === 1) { instance.role = roles[0]; instance.roleSource = "task.agent"; }
@@ -86,11 +125,15 @@ export function attributeScan(scan) {
     if (visited.has(id)) return { ids: [], evidence: [], reason: "delegation-cycle" };
     const next = new Set([...visited, id]), ids = new Set(), evidence = [];
     for (const d of parents.get(id) || []) {
-      evidence.push(d.eventKey);
+      evidence.push(d.eventKey, ...(d.evidence || []));
       if (tasks.has(d.phaseKey)) ids.add(d.phaseKey);
-      else for (const key of ownership(d.transcriptId, next).ids) ids.add(key);
+      else {
+        const upstream = ownership(d.transcriptId, next);
+        for (const key of upstream.ids) ids.add(key);
+        evidence.push(...upstream.evidence);
+      }
     }
-    const result = { ids: [...ids], evidence: [...new Set(evidence)], reason: ids.size === 1 ? "explicit-delegation" : ids.size > 1 ? "shared-across-tasks" : "source-not-recorded" };
+    const result = { ids: [...ids], evidence: [...new Set(evidence)], reason: ids.size === 1 ? "explicit-delegation" : ids.size > 1 ? "ambiguous-delegation" : "source-not-recorded" };
     memo.set(id, result); return result;
   }
   function ownerFor(e) {
@@ -131,6 +174,16 @@ export function buildLedger(scan) {
   const instances = measuredGroups(calls, c => c.instanceId || c.transcriptId || c.agent, (c, id) => ({ ...metadata.get(id), id,
     name: c.instanceName || c.agent, agent: c.agent, taskName: c.taskName, taskKey: c.taskKey, attribution: c.taskAttribution, role: c.role,
     assignmentEvidence: c.assignmentEvidence || [] }));
+  const instanceCalls = group(calls, c => c.instanceId || c.transcriptId || c.agent);
+  for (const instance of instances) {
+    const items = instanceCalls.get(instance.id);
+    instance.taskAssignments = measuredGroups(items, c => c.taskKey || SHARED_TASK, c => ({ name: c.taskName || "共享／未归属" }));
+    instance.taskKey = instance.taskAssignments.length === 1 ? instance.taskAssignments[0].id : null;
+    instance.taskName = instance.taskAssignments.length === 1 ? instance.taskAssignments[0].name : `跨 ${instance.taskAssignments.length} 个任务／归因桶`;
+    instance.attributionReasons = [...new Set(items.map(c => c.taskAttribution))];
+    instance.attribution = instance.attributionReasons.length === 1 ? instance.attributionReasons[0] : "multiple-attributions";
+    instance.assignmentEvidence = [...new Set([...(metadata.get(instance.id)?.assignmentEvidence || []), ...items.flatMap(c => c.assignmentEvidence || [])])];
+  }
   const bounds = contexts.filter(e => e.kind === "user-task" && e.agentType === "main" && e.timestamp).sort((a, b) => a.timestamp - b.timestamp || a.order - b.order);
   const timeMap = new Map();
   for (const c of calls) {
@@ -143,8 +196,17 @@ export function buildLedger(scan) {
   const windows = [...timeMap].sort((a, b) => a[0] - b[0]).map(([index, values]) => ({
     id: bounds[index]?.key || "time-unassigned", name: bounds[index]?.taskTitle || "时间／边界未记录", from: bounds[index]?.timestamp || null,
     to: index >= 0 ? bounds[index + 1]?.timestamp || null : bounds[0]?.timestamp || null, ...measure(values) }));
+  const expected = measure(calls), checks = [];
+  for (const [dimension, rows] of [["tasks", tasks], ["timeWindows", windows], ["instances", instances], ["roleModels", roleModels]]) {
+    for (const metric of ["calls", "input", "output", "cacheRead", "cacheWrite", "orchestrationInput", "orchestrationOutput", "orchestrationCacheRead", "measuredTokens", "costTotal"]) {
+      const actual = rows.reduce((sum, r) => sum + r[metric], 0), delta = actual - expected[metric];
+      const tolerance = metric === "costTotal" ? Math.max(1e-9, Math.abs(expected[metric]) * 1e-12) : 0;
+      checks.push({ dimension, metric, expected: expected[metric], actual, delta, ok: Math.abs(delta) <= tolerance });
+    }
+  }
+  const attributionReasons = measuredGroups(calls, c => JSON.stringify([c.agentType, c.taskAttribution]), c => ({ actorType: c.agentType, reason: c.taskAttribution }));
   return { tasks, roleModels, instances, timeWindows: windows,
-    reconciliation: { selected: calls.length, taskRows: tasks.reduce((n, t) => n + t.calls, 0), windowRows: windows.reduce((n, t) => n + t.calls, 0),
+    reconciliation: { checks, ok: checks.every(c => c.ok), selected: calls.length, taskRows: tasks.reduce((n, t) => n + t.calls, 0), windowRows: windows.reduce((n, t) => n + t.calls, 0),
       shared: tasks.find(t => t.id === SHARED_TASK)?.calls || 0, rule: "Each usage record counts once per additive dimension; detail rows are not additional spend." },
-    coverage: { roleKnown: calls.filter(c => c.role).length, taskKnown: calls.filter(c => c.taskKey && c.taskKey !== SHARED_TASK).length, selected: calls.length } };
+    coverage: { attributionReasons, roleKnown: calls.filter(c => c.role).length, taskKnown: calls.filter(c => c.taskKey && c.taskKey !== SHARED_TASK).length, selected: calls.length } };
 }

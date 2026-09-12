@@ -1,6 +1,6 @@
 {
   "name": "omp-session-cost",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "OMP session cost, task attribution, passive runtime diagnostics, and named baselines with original names.",
   "type": "module",
   "license": "MIT",
@@ -53,12 +53,16 @@
     "telemetry.js",
     "baseline.js",
     "report-zh.js",
-    "advanced-pages.js"
+    "advanced-pages.js",
+    "report-contract.js",
+    "clipboard.js",
+    "scripts/verify-report.mjs"
   ],
   "scripts": {
     "check": "node scripts/check.mjs && node --test test/*.test.mjs",
     "test": "node --test test/*.test.mjs",
-    "check:large": "node scripts/benchmark.mjs"
+    "check:large": "node scripts/benchmark.mjs",
+    "verify:report": "node scripts/verify-report.mjs"
   },
   "engines": {
     "node": ">=22"

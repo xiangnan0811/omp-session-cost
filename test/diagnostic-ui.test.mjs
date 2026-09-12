@@ -41,7 +41,7 @@ test("preview scope and protected context are reflected in the exact copied payl
 
 test("evidence requires an explicit toggle and always remains in local preview before copy", () => {
   const v = make(); v.openPreview("json");
-  assert.equal(JSON.parse(v.preview.payload).privacy.mode, "metadata-only");
+  assert.equal(JSON.parse(v.preview.payload).privacy.mode, "diagnostic-evidence");
   v.handleInput("e"); assert.equal(JSON.parse(v.preview.payload).privacy.mode, "reviewed-excerpts");
   assert.match(v.render(110).map(stripAnsi).join("\n"), /EXCERPTS ON/);
 });
@@ -121,10 +121,10 @@ test("persistent baseline write failure does not claim success or replace an exi
   assert.equal(v.bookmark, prior); assert.match(v.toast, /失败|failed/);
 });
 
-test("original names and schema 3 are present in the frozen copy preview", () => {
+test("original names and schema 4 are present in the frozen copy preview", () => {
   const v = make(); v.openPreview("json");
   const d = JSON.parse(v.preview.payload);
-  assert.equal(d.schemaVersion, 3); assert.equal(d.sessionId, "fixture-session");
+  assert.equal(d.schemaVersion, 4); assert.equal(d.sessionId, "fixture-session");
   assert.equal(d.privacy.agentNames, "preserved");
   assert.ok(v.preview.payload.includes("Frontend"));
   assert.ok(!v.preview.payload.includes('"Agent-3"'));

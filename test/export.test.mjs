@@ -39,7 +39,7 @@ test("public JSON preserves original identity and excludes database error fields
   const text = buildPublicJson(fixtureReport());
   const json = JSON.parse(text);
   assert.match(json.sessionId, /^fixture-session$/);
-  assert.equal(json.schemaVersion, 3);
+  assert.equal(json.schemaVersion, 4);
   assert.equal("rootSessionFile" in json, true);
   assert.equal("dbPath" in json.pricing, false);
   assert.equal("dbError" in json.pricing, false);
