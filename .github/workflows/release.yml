@@ -51,5 +51,5 @@ jobs:
             echo "Tag $TAG already exists without a release; inspect it manually."
             exit 1
           fi
-          (cd dist && sha256sum *.tgz example-diagnostic.md example-diagnostic.json example-tui.txt > SHA256SUMS)
-          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "omp-session-cost $TAG" --notes-file RELEASE_NOTES.md --latest dist/*.tgz dist/example-diagnostic.md dist/example-diagnostic.json dist/example-tui.txt dist/SHA256SUMS
+          (cd dist && sha256sum example-diagnostic.md example-diagnostic.json example-tui.txt > SHA256SUMS)
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "omp-session-cost $TAG" --notes-file RELEASE_NOTES.md --latest dist/example-diagnostic.md dist/example-diagnostic.json dist/example-tui.txt dist/SHA256SUMS

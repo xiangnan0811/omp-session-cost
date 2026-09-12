@@ -87,13 +87,13 @@ export function itemLine(view, item, width, selected) {
       ? view.error(rightAnsi(formatInt(row.calls), layout.calls))
       : view.muted(rightAnsi(formatInt(row.calls), layout.calls));
     const tokens = view.paint(color, rightAnsi(formatTokens(row.measuredTokens), layout.tokens));
-    const cost = view.warning(rightAnsi(formatCost(row.costTotal), layout.cost));
+    const cost = view.accent(rightAnsi(formatCost(row.costTotal), layout.cost));
     const shareText = view.dim(rightAnsi(formatPercent(share), layout.share));
     return `${name} ${calls} ${tokens} ${cost} ${shareText} ${view.bar(share, color, layout.bar)}`;
   }
 
   const value = view.paint(
-    view.metric === "cost" ? "warning" : color,
+    view.metric === "cost" ? "accent" : color,
     rightAnsi(formatMetric(metricValue(row, view.metric), view.metric), layout.value),
   );
   const shareText = view.dim(rightAnsi(formatPercent(share), layout.share));
@@ -116,7 +116,7 @@ export function actorLine(view, item, width, selected) {
     rightAnsi(callShare, 7),
     rightAnsi(formatTokens(row.measuredTokens), 9),
     rightAnsi(tokenShare, 7),
-    view.warning(rightAnsi(formatCost(row.costTotal), 9)),
+    view.accent(rightAnsi(formatCost(row.costTotal), 9)),
     rightAnsi(costShare, 7),
     view.bar(view.share(row, view.report.total), "accent", 8),
   ].join(" ");
@@ -130,7 +130,17 @@ export function tabBar(view, width, tabs) {
       : view.muted(` ${label} `);
   }).join(` ${view.dim("│")} `);
   const full = render("label");
-  return textWidth(full) <= width ? full : render("short");
+  if (textWidth(full) <= width) return full;
+  const short = render("short"); if (textWidth(short) <= width) return short;
+  let first = view.activeTab, last = view.activeTab;
+  const partial = () => `${first > 0 ? "‹ " : ""}${tabs.slice(first, last + 1).map((tab, i) => first + i === view.activeTab ? view.accent(view.strong(`[${tab.short}]`)) : view.muted(tab.short)).join(" │ ")}${last < tabs.length - 1 ? " ›" : ""}`;
+  for (let step = 1; step < tabs.length; step++) {
+    const left = first > 0, right = last < tabs.length - 1;
+    if (!left && !right) break;
+    if (right && (!left || step % 2)) { last++; if (textWidth(partial()) > width) { last--; break; } }
+    else { first--; if (textWidth(partial()) > width) { first++; break; } }
+  }
+  return partial();
 }
 
 export function metricBar(view, width) {
@@ -170,7 +180,7 @@ export function modalRows(view) {
       if (truncated) p.wrapCache.rows.push(view.detail("PREVIEW LIMIT: only the first 100,000 characters / 5,000 wrapped rows are shown. The complete payload is unchanged. Save for full review; excerpt-mode clipboard is disabled.", 0, "warning"));
     }
     return [view.heading(`${view.modal === "subject" ? "SUBJECT DIAGNOSTICS" : "COPY PREVIEW"} · ${p.scopeLabel} · ${p.calls} calls · ${p.bytes} bytes`),
-      view.detail(p.includeEvidence ? "EXCERPTS ON: review every excerpt; automatic redaction is not a guarantee." : "Metadata only; no transcript excerpts. e toggles reviewed excerpts.", 0, p.includeEvidence ? "warning" : "muted"),
+      view.detail(p.includeEvidence ? "EXCERPTS ON: review every excerpt; automatic redaction is not a guarantee." : "原始名称、任务首行与事实元数据；e 可附加日志片段。", 0, p.includeEvidence ? "warning" : "muted"),
       view.detail("f scope · g question · p protected scope · n annotation · Enter copy · s save", 0),
       ...(view.modal === "subject" ? [...p.summaryLines.map(line => view.detail(line, 0, "text")), view.separator()] : []),
       ...p.wrapCache.rows];
@@ -188,7 +198,7 @@ export function modalRows(view) {
       view.detail("f scope: current/main/all   b bookmark   w newly observed records", 0),
       view.detail("Preview: e evidence, f scope, g goal, p protected, n annotation, s save", 0),
       view.detail("Preview/Help: arrows, PgUp/PgDn, Home/End scroll. Enter copies exact preview.", 0),
-      view.detail("Bookmarks and analysis context persist only in this process/session.", 0),
+      view.detail("Bookmarks and analysis context persist beside the root session; failed writes are reported.", 0),
     ];
   }
   const options = copyOptions();
@@ -267,7 +277,7 @@ export function renderExplorer(view, maxWidth, tabs) {
     accentEdge(`┌${"─".repeat(Math.max(1, width - 2))}┐`),
     frameRow(`${headerLeft}${headerGap}${headerRight}`),
     frameRow(tabBar(view, inner, tabs)),
-    frameRow(""),
+    frameRow(view.dim(`范围: ${[view.report.scope?.agent, view.report.scope?.actorType, view.report.scope?.role, view.report.scope?.taskKey, view.report.scope?.modelId, view.report.scope?.status].filter(Boolean).join(" / ") || "全部选定主体"} · ${view.report.scope?.branch || "recorded-spend"}${view.report.comparison ? " · 基线:" + view.report.comparison.name : ""} · API 等价`)),
   ];
   for (const entry of visible) out.push(`${edge("│")} ${styleContentRow(view, entry, inner, selectedId)} ${edge("│")}`);
   for (let index = visible.length; index < bodyRows; index += 1) out.push(frameRow(""));

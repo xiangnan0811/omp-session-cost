@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 import { parseTime } from "./transcript.js";
+import { displayName, taskFacts, observeSemanticEntry, resultFacts } from "./semantic.js";
+import { noteFacts } from "./semantic.js";
 import { RULE_VERSION } from "./version.js";
 
 export const numberOrNull = value => typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
@@ -159,7 +161,7 @@ export function createDiagnosticIndexer() {
     const fileKey = fileKeys.get(file) || `F${fileKeys.size + 1}`;
     fileKeys.set(file, fileKey);
     if (entry.type === "session") { transcriptKeys.set(file, (typeof entry.id === "string" && entry.id ? entry.id : fileKey)); return null; }
-    if (entry.type === "title") return null;
+
     const entryId = typeof entry.id === "string" && entry.id ? entry.id : `line-${position.line || ++order}`;
     const fileId = transcriptKeys.get(file) || fileKey;
     const baseKey = `${fileId}\u0000${entryId}`;
@@ -191,8 +193,8 @@ export function createDiagnosticIndexer() {
     } else if (entry.type === "compaction" || entry.message?.role === "compactionSummary") {
       event.kind = "compaction"; event.tokensBefore = numberOrNull(entry.tokensBefore);
       event.compactionMode = entry.preserveData?.openaiRemoteCompaction ? "recorded-provider-native" : "not-recorded";
-    } else if (entry.type === "message") {
-      const message = entry.message || {};
+    } else if (entry.type === "message" || entry.type === "model_usage") {
+      const message = entry.type === "model_usage" ? { ...entry, role: "assistant", content: [] } : entry.message || {};
       if (message.role === "user" && message.synthetic !== true && message.attribution !== "agent") {
         const n = (usersByFile.get(file) || 0) + 1; usersByFile.set(file, n);
         event.kind = "user-task"; event.phase = `U${n}`; state.phase = key;
@@ -222,8 +224,9 @@ export function createDiagnosticIndexer() {
           const args = rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs) ? rawArgs : {};
           const rawId = block.id ?? block.toolCallId;
           const id = typeof rawId === "string" ? rawId : null;
-          const tool = { id, name: KNOWN_TOOLS.has(name) ? name : "other", ...classifyTool(name, args), result: null, startedAt: null,
+          const tool = { id, name: displayName(name), delegations: taskFacts(name, args, id), ...classifyTool(name, args), result: null, startedAt: null,
             severity: ["nit", "concern", "blocker"].includes(args?.severity) ? args.severity : "unspecified" };
+          if (name === "advise" && typeof args.note === "string") tool.generatedNotes = noteFacts([{ ...args, advisor: args.advisor || "default" }]);
           event.tools.push(tool);
           if (id) pendingTools.set(`${fileId}\u0000${id}`, tool);
         }
@@ -236,11 +239,11 @@ export function createDiagnosticIndexer() {
         const resultToolId = typeof message.toolCallId === "string" ? message.toolCallId : null;
         const tool = resultToolId ? pendingTools.get(`${fileId}\u0000${resultToolId}`) : null;
         event.toolCallId = resultToolId;
-        event.toolName = KNOWN_TOOLS.has(message.toolName) ? message.toolName : "other";
+        event.toolName = displayName(message.toolName);
         const result = resultEvidence(message);
         event.outcome = result.outcome; event.privateExcerpt = result.excerpt;
         if (tool) {
-          tool.result = { ...result, eventKey: key, timestamp };
+          tool.result = { ...result, eventKey: key, timestamp, observations: resultFacts(message.details) };
           pendingTools.delete(`${fileId}\u0000${message.toolCallId}`);
         }
       } else if (message.role === "user") {
@@ -267,6 +270,11 @@ export function createDiagnosticIndexer() {
         event.privateExcerpt = cleanText(textContent(entry.content ?? entry.message?.content), 320);
       }
     }
+    observeSemanticEntry(entry, event);
+    if (event.kind === "session-init") state.init = { ...event.init, eventKey: key };
+    const assignment = event.workflow;
+    if (assignment && ["task-assignment", "review-round"].includes(assignment.kind)) state.assignment = assignment;
+    event.assignment = state.assignment || null; event.historicalInit = state.init || null;
     event.phaseKey ??= state.phase || null;
     if (!parentKey && explicitParent) event.stateBoundary = "explicit-root";
     if (parentKey && (!states.has(parentKey) || conflictedKeys.has(parentKey))) event.historyGap = true;
@@ -280,7 +288,7 @@ export function createDiagnosticIndexer() {
 export function attachCallFacts(call, event) {
   if (!event) return;
   Object.assign(call, { recordKey: event.key, fileKey: event.fileKey, sequence: event.order,
-    transcriptId: event.transcriptId, usageFacts: event.usage, stopStatus: event.stopStatus, hasResponseId: event.hasResponseId,
+    transcriptId: event.transcriptId, historicalInit: event.historicalInit, assignment: event.assignment, purpose: event.purpose || null, modelRole: event.modelRole || null, usageFacts: event.usage, stopStatus: event.stopStatus, hasResponseId: event.hasResponseId,
     hasRequestId: event.hasRequestId, responseRef: event.responseRef, requestRef: event.requestRef, identityConflict: event.identityConflict, historicalThinking: event.historicalThinking,
     historicalModel: event.historicalModel, requestEffort: event.requestEffort, phaseKey: event.phaseKey,
     behavior: event.behavior, previousAssistantKey: event.previousAssistantKey, toolFacts: event.tools });
@@ -401,9 +409,9 @@ export function analyzeEvents(calls, events, contextEvents = events) {
   for (const event of events) {
     if (event.agentType === "main" && ["incoming-message", "advisor-delivery", "agent-update"].includes(event.kind)) {
       const next = mainCalls[upperBound(mainCalls, event.order, c => c.sequence)];
-      if (next) interruptions.push({ eventKey: event.key, kind: "recorded-fact", deliveryLayer: event.deliveryLayer || "observed-in-transcript",
-        severity: event.severity || null, nextCallKey: next.recordKey,
-        intervalMs: event.timestamp && next.timestamp && next.timestamp >= event.timestamp ? next.timestamp - event.timestamp : null,
+      interruptions.push({ eventKey: event.key, kind: "recorded-fact", deliveryLayer: event.deliveryLayer || "observed-in-transcript",
+        severity: event.severity || null, nextCallKey: next?.recordKey || null,
+        intervalMs: event.timestamp && next?.timestamp && next.timestamp >= event.timestamp ? next.timestamp - event.timestamp : null,
         measuredCallsBeforeNext: 0, adjudicationAt: null,
         caveat: "Transcript timestamp gap to the next main usage record, not proof of handling, request start, continuous inference or charges. Other side channels may be unmetered." });
     }

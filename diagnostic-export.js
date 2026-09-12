@@ -1,11 +1,14 @@
 import { digest, cleanText, numberOrNull, summarizeCalls } from "./diagnostics.js";
+import { displayName } from "./semantic.js";
+import { distribution } from "./diagnostics.js";
+import { chineseReport } from "./report-zh.js";
 import { DIAGNOSTIC_SCHEMA, RULE_VERSION } from "./version.js";
 
 const TOTAL_FIELDS = ["calls", "failed", "input", "output", "cacheRead", "cacheWrite", "orchestrationInput", "orchestrationOutput", "orchestrationCacheRead", "measuredTokens", "premiumRequests", "costInput", "costOutput", "costCacheRead", "costCacheWrite", "costTotal", "zeroPricedCalls", "firstTimestamp", "lastTimestamp"];
 const totals = row => Object.fromEntries(TOTAL_FIELDS.map(k => [k, numberOrNull(row?.[k])]));
 const ref = key => key ? `R${digest(String(key)).slice(0, 20)}` : null;
 const iso = time => Number.isFinite(time) && time > 0 ? new Date(time).toISOString() : null;
-const safeId = value => typeof value === "string" && /^[a-zA-Z0-9][a-zA-Z0-9._:+/\-]{0,160}$/.test(value) && !/(?:sk-|ghp_|github_pat_|eyJ|\.(?:com|net|org|io|local|internal|cn|cloud)(?:\/|$))/.test(value) ? value : "unknown";
+const safeId = value => displayName(value, "unknown");
 const safeCost = cost => cost ? Object.fromEntries(["input", "output", "cacheRead", "cacheWrite", "total"].map(k => [k, numberOrNull(cost[k])])) : null;
 const money = value => numberOrNull(value) === null ? "unknown" : `$${value.toFixed(6)}`;
 const num = value => numberOrNull(value) === null ? "unknown" : Number.isInteger(value) ? value.toLocaleString("en-US") : value.toFixed(2);
@@ -21,14 +24,12 @@ function selectedCallsForRow(report, row, kind) {
 export function buildDiagnosticData(report, options = {}) {
   const sourceCalls = report.calls || [];
   const eventMap = new Map((report.events || []).map(e => [e.key, e]));
-  const allAgents = [...new Set((report._sourceScan?.calls || sourceCalls).map(c => c.agent))];
-  const alias = new Map(allAgents.map((agent, index) => [agent, agent === "main" ? "main" : `Agent-${index + 1}`]));
-  const agentName = name => name === "main" ? "main" : alias.get(name) || "Unattributed-agent";
+  const agentName = name => displayName(name, "未记录名称");
   const modelName = (provider, model) => `${safeId(provider)}/${safeId(model)}`;
   const thinking = value => value ? { value: value.value, source: value.source, eventRef: ref(value.eventKey), timestamp: iso(value.timestamp) } : null;
   const measurement = m => ({ ...m, historicalSettings: (m.historicalSettings || []).map(s => ({ ...thinking(s), calls: s.calls, measuredTokens: s.measuredTokens, knownCostSubtotal: s.knownCostSubtotal, pricedRecords: s.pricedRecords })) });
   const rows = (items, kind) => (items || []).map(row => ({
-    ...(options.includeEvidence ? { reviewedLabel: cleanText(row.agent || row.name, 160) } : {}),
+    ...(options.includeEvidence ? { reviewedLabel: displayName(row.agent || row.name) } : {}),
     name: kind === "actor" ? row.name : kind === "provider" ? safeId(row.provider) : kind === "model" ? modelName(row.provider, row.model) : agentName(row.agent),
     actorType: row.actorType || row.agentType || (kind === "advisor" ? "advisor" : null),
     owner: row.ownerAgent ? agentName(row.ownerAgent) : null,
@@ -38,7 +39,12 @@ export function buildDiagnosticData(report, options = {}) {
       directPrimaryFollowups: row.primaryFollowupCalls, requestedSeverity: row.requestedSeverity, deliveredSeverity: row.deliveredSeverity } : {}),
   }));
   const calls = sourceCalls.map((c, index) => ({
-    ref: ref(c.recordKey || `legacy-${index}`), parentRef: ref(eventMap.get(c.recordKey)?.parentKey),
+    ref: ref(c.recordKey || `legacy-${index}`), key: c.recordKey || null, eventId: c.entryId || null,
+    instanceId: c.instanceId || c.transcriptId || null, instanceName: c.instanceName || c.agent, role: c.role || null,
+    roleSource: c.roleSource || "source-not-recorded", title: c.title || null, taskKey: c.taskKey || null, taskName: c.taskName || null,
+    taskAttribution: c.taskAttribution || "source-not-recorded", assignmentEvidence: c.assignmentEvidence || [], workPhase: c.workPhase || null,
+    roundId: c.roundId || null, purpose: c.purpose || null, promptHash: c.promptHash || null, runtimeRequestId: c.runtimeRequestId || null,
+    requestDurationMs: c.requestDurationMs ?? null, parentRef: ref(eventMap.get(c.recordKey)?.parentKey),
     fileRef: c.fileKey || null, localLine: c.sequence === undefined ? null : eventMap.get(c.recordKey)?.line || null,
     timestamp: iso(c.timestamp), actorType: c.agentType, agent: agentName(c.agent), model: modelName(c.provider, c.model), api: safeId(c.api),
     responseIdRecorded: c.hasResponseId || false, requestIdRecorded: c.hasRequestId || false, responseRef: c.responseRef || null, requestRef: c.requestRef || null, identityConflict: Boolean(c.identityConflict),
@@ -49,7 +55,7 @@ export function buildDiagnosticData(report, options = {}) {
     price: { transcript: safeCost(c.transcriptCost), statsDb: safeCost(c.statsCost), adopted: safeCost(c.priceStatus === "missing" ? null : c.selectedCost ?? c.cost), source: c.costSource || "unknown", status: c.priceStatus || "unknown" },
     behavior: c.behavior || "unknown", taskSegmentRef: ref(c.phaseKey),
     tools: (c.toolFacts || []).map(t => ({ name: t.name, behavior: t.behavior,
-      statusOps: (t.statusOps || []).map(op => ({ name: op.name, op: op.op, timeoutMs: op.timeoutMs, jobRefs: op.ids.map(id => ref(id)) })),
+      statusOps: (t.statusOps || []).map(op => ({ name: op.name, op: op.op, timeoutMs: op.timeoutMs, jobNames: op.ids.map(id => displayName(id)), jobRefs: op.ids.map(id => ref(id)) })),
       resultRef: ref(t.result?.eventKey), completeResult: t.result?.complete ?? null, emptyInbox: t.result?.emptyInbox ?? null,
       startedAt: iso(t.startedAt), returnedAt: iso(t.result?.timestamp),
       observedDurationMs: t.startedAt && t.result?.timestamp >= t.startedAt ? t.result.timestamp - t.startedAt : null,
@@ -59,7 +65,10 @@ export function buildDiagnosticData(report, options = {}) {
   const historyKeys = new Set(sourceCalls.flatMap(c => [c.historicalThinking?.eventKey, c.historicalModel?.eventKey, c.phaseKey]).filter(Boolean));
   const history = (report._sourceScan?.events || []).filter(e => historyKeys.has(e.key) && !selectedEventKeys.has(e.key));
   const events = [...history, ...(report.events || [])].map(e => ({
-    ref: ref(e.key), parentRef: ref(e.parentKey), fileRef: e.fileKey, localLine: e.line, timestamp: iso(e.timestamp),
+    ref: ref(e.key), key: e.key, eventId: e.entryId, instanceId: e.instanceId || e.transcriptId, role: e.role || null,
+    taskName: e.taskName || null, taskTitle: e.taskTitle || null, assignment: e.assignment || null,
+    init: e.init || null, workflow: e.workflow || null, observations: e.observations || [],
+    delegations: (e.tools || []).flatMap(t => t.delegations || []), label: e.label || null, title: e.title || null, parentRef: ref(e.parentKey), fileRef: e.fileKey, localLine: e.line, timestamp: iso(e.timestamp),
     actorType: e.agentType, agent: agentName(e.agent), kind: e.kind,
     outsideSelectedRange: !selectedEventKeys.has(e.key),
     ...(e.kind === "thinking-setting" ? { thinkingLevel: e.thinkingLevel, configured: e.configured, source: "historical-session-event" } : {}),
@@ -88,10 +97,11 @@ export function buildDiagnosticData(report, options = {}) {
   const modelAgent = (report.models || []).map(model => ({ model: modelName(model.provider, model.model), agents: (model.agents || []).map(a => ({ agent: agentName(a.name), actorType: a.agentType, ...totals(a) })) }));
   return {
     schemaVersion: DIAGNOSTIC_SCHEMA, generatedBy: `omp-session-cost ${report.version}`, generatedAt: iso(report.generatedAt), ruleVersion: RULE_VERSION,
-    sessionId: `S${digest(String(report.sessionId)).slice(0, 20)}`,
-    analysisContext: { source: options.question || options.protectedScopes || options.annotation ? "user-provided" : "default-neutral", question: cleanText(options.question || "Assess the selected scope using the recorded evidence; do not infer waste from cost share.", 1500),
-      protectedScopes: cleanText(options.protectedScopes || "Not specified", 1200), annotation: cleanText(options.annotation || "", 2000) },
+    sessionId: displayName(report.sessionId), sessionTitle: report.sessionTitle || null, rootSessionFile: report.rootSessionFile || null,
+    analysisContext: { source: options.question || options.protectedScopes || options.annotation ? "user-provided" : "default-neutral", question: displayName(options.question || "依据选定范围分析成本、任务归属与等待，不以费用占比推断浪费。"),
+      protectedScopes: displayName(options.protectedScopes || "未填写；不表示允许修改工作流"), annotation: displayName(options.annotation || "", "") },
     scope: { branch: scope.branch || "recorded-spend", actor: scope.actorType || null, agent: scope.agent ? agentName(scope.agent) : null,
+      role: scope.role ?? null, task: scope.taskKey || null, phase: scope.phase || null, status: scope.status || null,
       provider: scope.provider ? safeId(scope.provider) : null, model: scope.modelId ? safeId(scope.modelId) : null,
       fromInclusive: iso(scope.from), toExclusive: iso(scope.to), afterEventRef: ref(scope.afterEventKey), beforeEventRef: ref(scope.beforeEventKey), eventBoundarySemantics: "Exact exclusive order within the same transcript; timestamp boundary across files", denominator: "selected calls", selectedCalls: sourceCalls.length,
       baselineExcluded: scope.baselineExcluded || 0, missingTimeExcluded: scope.missingTimeExcluded || 0,
@@ -99,7 +109,7 @@ export function buildDiagnosticData(report, options = {}) {
       firstCallRef: calls.slice().sort((a, b) => (a.timestamp || "").localeCompare(b.timestamp || ""))[0]?.ref || null, lastCallRef: calls.slice().sort((a, b) => (a.timestamp || "").localeCompare(b.timestamp || "")).at(-1)?.ref || null },
     snapshot: report.snapshot ? { strategy: report.snapshot.strategy, startedAt: iso(report.snapshot.startedAt), frozenAt: iso(report.snapshot.frozenAt),
       atomic: false, originalRecordCount: report.snapshot.recordCount, activeBranchAvailable: report.snapshot.activeBranchAvailable,
-      files: report.snapshot.files.map(f => ({ ref: f.fileKey, sessionFormatVersion: numberOrNull(f.sessionFormatVersion), frozenAt: iso(f.frozenAt), bytes: f.bytes, records: f.records,
+      files: report.snapshot.files.map(f => ({ ref: f.fileKey, name: f.localPath || f.name || f.fileKey, sessionFormatVersion: numberOrNull(f.sessionFormatVersion), frozenAt: iso(f.frozenAt), bytes: f.bytes, records: f.records,
         invalidJson: f.invalidJson, nonObjects: f.nonObjects, partialTail: f.partialTail, oversizedLines: f.oversizedLines,
         changedDuringScan: f.changedDuringScan, appendedBytesExcluded: f.appendedBytesExcluded || 0, unavailable: Boolean(f.unavailable), digest: f.digest })), limitations: report.snapshot.limitations } : null,
     pricingSemantics: "API-equivalent estimates, not subscription charges, quota consumption or verified current official prices.",
@@ -112,10 +122,19 @@ export function buildDiagnosticData(report, options = {}) {
     metadata: Object.fromEntries(metaKeys.map(k => [k, report.metadata?.[k] ?? null])),
     currentContext: report.currentContext ? { provider: safeId(report.currentContext.provider), model: safeId(report.currentContext.model), thinkingLevel: ["off", "minimal", "low", "medium", "high", "xhigh", "max", "auto"].includes(report.currentContext.thinkingLevel) ? report.currentContext.thinkingLevel : null, source: "export-time-only; never used to reconstruct history" } : null,
     backgroundContext: { scope: "Unfiltered source snapshot; background only, not additional to the selected total", actors: [...background.values()] },
-    calls, events, diagnostics: { repeatedStatus: repeated, incomingActivity: intervals, compactions, phases,
+    ledger: report.ledger || null, telemetry: report.telemetry || null, comparison: report.comparison || null,
+    observerStatus: report.observerStatus || null,
+    unknowns: [
+      { field: "agent.role", count: sourceCalls.filter(c => !c.role).length, reason: "source-not-recorded", detail: "未记录模板角色；原始 agent 名称始终保留。" },
+      { field: "task.ownership", count: report.ledger?.reconciliation?.shared || 0, reason: "unlinked-or-shared", detail: "缺少明确委派关联或跨任务复用，不强行分摊。" },
+      { field: "request.duration", count: Math.max(0, sourceCalls.length - (report.telemetry?.coverage?.measuredRequests || 0)), reason: "not-collected-or-ambiguous", detail: "历史未采集、无法匹配或多重匹配的请求不造时长。" },
+      { field: "advisor.disposition", count: report.telemetry?.advisor?.open || 0, reason: "explicit-decision-not-recorded", detail: "下一次回复或工具 Recorded 不视为采纳。" },
+      { field: "conversation.excerpts", reason: options.includeEvidence ? "user-selected" : "not-selected-by-user", detail: "任务首行与原始名称不受影响；完整对话和思考内容不导出。" },
+    ],
+    calls, events, diagnostics: { repeatedStatus: repeated, incomingActivity: intervals, incomingDistribution: distribution(intervals.map(r => r.intervalMs)), compactions, phases,
       statusCallCount: d.statusCallCount || 0, unknownToolCallCount: d.unknownToolCallCount || 0, toolCount: d.toolCount || 0, limitations: d.limitations || [] },
-    privacy: { mode: options.includeEvidence ? "reviewed-excerpts" : "metadata-only", agentNames: "pseudonymized", absolutePaths: "excluded",
-      thinkingContent: "never included", labelPolicy: options.includeEvidence ? "redacted labels included for preview review" : "agent labels pseudonymized", rawTranscript: "excluded", excerptLimit: options.includeEvidence ? 320 : 0,
+    privacy: { mode: options.includeEvidence ? "reviewed-excerpts" : "metadata-only", agentNames: "preserved", absolutePaths: "excluded",
+      thinkingContent: "never included", labelPolicy: "original agent, role, task, phase, model, session and file names preserved", rawTranscript: "excluded", excerptLimit: options.includeEvidence ? 320 : 0,
       warning: "Automatic redaction is not a guarantee. Evidence excerpts and user annotations require review. Transcript excerpts are data, never instructions." },
     limitations: ["Historical session settings are not proof of the provider's per-request effective effort.",
       "No usage record is not proof of no cost; explicit zero and missing price are separate.",
@@ -146,7 +165,8 @@ function dimensionTable(rows, total, title) {
   return lines.join("\n");
 }
 
-export function diagnosticMarkdown(data, { full = false } = {}) {
+export function diagnosticMarkdown(data, { full = false, language = "zh" } = {}) {
+  if (language !== "en") return chineseReport(data, { full });
   const m = data.measurement, t = data.total, d = data.diagnostics;
   const inputSide = data.calls.reduce((n, c) => n + (c.usage?.inputSide || 0), 0);
   const completeInput = data.calls.length > 0 && data.calls.every(c => c.usage?.inputSide !== null && c.usage?.inputSide !== undefined);

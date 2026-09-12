@@ -1,121 +1,96 @@
 # omp-session-cost
 
-`omp-session-cost` adds `/cost`, a theme-aware, lower-half terminal explorer and self-contained diagnostic export for **oh-my-pi** sessions with multiple providers, models, subagents and advisors.
+为 **oh-my-pi（OMP）** 提供 `/cost`：半屏终端统计、真实任务归因、被动运行时观察、命名基线，以及可独立分析的中文报告。
 
-It reads the persisted current artifact tree and local OMP pricing records. Opening the explorer or building a diagnostic report does not call a model or inject the report into model context.
+**原始名称直接保留。** Agent、角色、任务、阶段、模型、会话和证据文件名称不会被替换为 `Agent-N`。费用是 **API 等价估算**，不是订阅扣款、剩余额度或供应商对账结果。
 
-## Install or update
+## 安装或升级到 0.7.0
 
 ```sh
-omp plugin install github:xiangnan0811/omp-session-cost
+omp plugin install "github:xiangnan0811/omp-session-cost#v0.7.0"
 ```
 
-Restart OMP after installing/updating. Requires Node >=22; no third-party runtime dependencies.
+安装后重启 OMP，使观察器在该进程中加载；执行 `/cost` 可核对版本。已经运行的其他 OMP 进程也需要分别重新加载插件，不能假定它们自动切换。
 
-## v0.6.0: from aggregate totals to diagnostic evidence
+这是正常的 GitHub 插件安装渠道，不需要下载压缩包、手工覆盖文件或发布到 npm registry。`omp update` 更新的是 OMP 本身，不是本插件的专用更新命令。要求 Node.js >=22；不新增第三方运行时依赖。
 
-- Per-subject input/output/cache cost breakdowns, nonzero/known-zero/missing-usage distinctions, price coverage and input P50/P95/max.
-- Historical model/thinking events with parent-chain provenance, recorded request effort when available, and a **separate** export-time context. Current settings never replace missing history.
-- Historical transcript cost **and** matched `stats.db` cost preserved next to the adopted estimate.
-- Frozen per-file byte-prefix snapshots, coverage warnings, call/event manifests, scoped time/agent/model/branch views and in-memory new-record bookmarks.
-- Conservative repeated-status candidates, incoming-message-to-next-main-record intervals, observed compaction inputs and genuine user-task segments. No invented savings, adjudication, necessity or adoption scores.
-- Self-contained default AI diagnostic bundle and schema-2 JSON; selected subjects get the same context and evidence, not a stripped-down total.
-- Local copy preview with user question/protected scopes, optional reviewed redacted excerpts, full-size save fallback and no silent clipboard truncation.
-- Original six tabs, theme-aware selection, attribution drill-down and bottom-anchored 52% height retained.
+## 0.7.0 的完整范围
 
-**Costs are API-equivalent estimates, not subscription charges or remaining quota. A high share is not proof of waste. Missing information is explicitly unknown.**
+本版同时实现任务归因与运行时诊断，不把时序、Advisor、审查或压缩观察推迟到后续版本。
 
-## Usage
+| 能力 | 实际行为 |
+| --- | --- |
+| 原始身份 | 保留 agent 实例名、模板角色、任务标题、父代理、委派证据和初始化模型；不根据模型名称猜角色。 |
+| 任务总账 | 主控、子代理及明确关联的 Advisor 按任务汇总；另有时间窗口视图。复用／共享／缺少关系的记录不强行分摊。 |
+| 分项成本 | 任务、角色 × 模型、实例均展示输入、缓存读写、输出、价格覆盖与输入 P50/P95/max；失败和中断仍计入已发生用量。 |
+| 辅助调用 | 读取 `model_usage`，保留 compaction 等用途及显式角色，不漏掉已记录的辅助模型费用。 |
+| 持久化基线 | 命名快照、重启后读取、增量和对比；保留原始历史价格、任务组成与不可比因素。 |
+| 请求与等待 | 被动记录请求钩子、响应头、首个输出、消息结束、工具、原生 wait、审批和重试；区间并集避免把并行时间简单相加。 |
+| Advisor | 区分建议产生、交付、请求钩子观察、明确处置和动作。接受建议不等于 blocker 已修复；不把后续回复当作采纳。 |
+| 审查与压缩 | 读取结构化 round/finding/acceptance；压缩前后窗口、同模型情况和可关联辅助调用单列，不宣称净节省或质量分。 |
+| 配置证据 | 磁盘哈希、系统提示钩子观察、明确加载声明和请求关联分开；不把文件修改当作生效证明。 |
+| 导出 | 默认中文自包含报告、原始事件 ID 和证据关联；全量统计，明确抽样；完整 Markdown／JSON 不截断。 |
+| 交互与开销 | 保留原有六页及半屏主题交互，新增任务／时序／对比页；复用一份未变化的已解析快照，价格仍重新读取。 |
+
+## 使用
 
 ```text
 /cost
 /cost refresh
 /cost main
-/cost main from=2026-09-01T00:00:00Z to=2026-09-02T00:00:00Z
-/cost model=openai-codex/gpt-6-astra
-/cost after=ENTRY_ID before=OTHER_ENTRY_ID
-/cost active
-/cost mark
-/cost since
+/cost actor=advisor
+/cost agent="BE-01 恢复链修复"
+/cost role=grok-reviewer
+/cost task="修复 Xirang"
+/cost phase="定向复验"
+/cost status=error
+/cost from=2026-09-11T00:00:00Z to=2026-09-12T00:00:00Z
+/cost mark="等待规则调整前"
+/cost since="等待规则调整前"
+/cost compare="等待规则调整前"
+/cost baselines
 /cost help
 ```
 
-`active` requires the actual runtime main leaf and conservatively excludes descendants with unproven branch linkage. The default retains recorded abandoned paths inside this artifact tree, while excluding pre-fork inherited usage. `mark`/`since` are per-process, per-session record-set comparisons, not causal before/after experiments.
+`mark` 记录观察边界，不证明此刻规则已经加载。`since` 排除基线已记录的调用／事件；`compare` 展示基线历史和当前范围新增记录，不把两段不同任务当成受控实验。没有基线时不会暗中创建一个空基线来伪造对比。
 
-## Explorer
+时间过滤采用起点包含、终点不包含。主体、模型、任务、状态和阶段过滤可以组合；`active` 仍只展示可证实的主控活动路径，不能将没有分支归属证据的下属工作混入。
 
-The top level stays compact: **Overview**, **Providers**, **Models**, **Agents**, **Advisors**, **Details**. Enter expands provider/model/agent attribution. `d` opens the selected subject's cost/history summary and full diagnostics. Percentages use the selected scope as denominator; background source totals are separately labeled.
+## 界面与复制
 
-```text
-Tab / Shift+Tab       switch tabs
-1 .. 6                jump to a tab
-Up / Down, j / k      select or scroll
-PgUp / PgDn           page
-Home / End            first / last
-Enter / Right         expand attribution
-Left / Esc            collapse or return
-m                     Cost → Tokens → Calls
-s                     metric/name sort (explorer)
-d                     selected subject diagnostics
-f                     scope: original / main / all actors
-b                     mark snapshot in memory
-w                     toggle newly observed records since bookmark
-c                     copy-format menu, then local preview
-r                     refresh transcripts and official pricing
-? / h                 help
-q                     return / close
-Esc                   return through modal layers before closing
-```
+原有 `Overview / Providers / Models / Agents / Advisors / Details` 保留，新增 `任务 / 时序 / 对比`。`1` 至 `9` 或 Tab／左右方向键切页；上下选择，Enter 展开，`d` 查看主体详情，`c` 打开复制菜单，`?` 查看帮助，Esc／q 返回。仍然使用底部 52% 高度和当前主题，窄终端只显示能容纳的标签但保证当前页可见。
 
-## Copy preview
+`b` 保存默认基线，`w` 切换新增记录。复制预览可填写分析目标、保护范围和用户注释，这些信息会持久保存；注释明确标记为用户提供，不冒充日志证据。没有填写保护范围不代表允许关闭 Advisor、降低模型或修改审查规则。
 
-Choose **AI diagnostic bundle**, **Current selection**, **Current tab**, **Full Markdown**, or **Full JSON**. Enter opens the preview. A second Enter copies exactly the previewed payload; nothing is copied on the first Enter.
+界面、预览、复制和保存共用同一冻结报告。打开预览不会偷偷重新扫描；复制内容与预览 payload 一致。可选完整 Markdown 或格式 v3 JSON，保留完整调用和事件。紧凑报告仅对高金额调用、重复状态候选和最长活动间隔等明细明确选样，汇总仍基于全量。
 
-```text
-f                     preview scope: current / main / all / selection
-g                     edit analysis question
-p                     edit protected / do-not-optimize scopes
-n                     edit user annotation (not plugin-verified)
-e                     toggle reviewed redacted excerpts
-Enter / c             copy the exact preview
-s                     save the complete payload to a NEW file
-Up/Down, PgUp/PgDn     scroll preview
-Home / End            start / end
-Esc                   back without copying
-```
+名称不会隐藏。完整对话、原始思考内容、系统提示正文和供应商请求正文不自动导出。日志片段可在预览中选入；凭据会清除。终端控制码会去除，以免名称破坏终端显示。长片段预览不能完整展示时可保存完整文件，payload 本身不被截断。
 
-For a main-only analysis, select main with `f` or `/cost main` and set protected scopes, for example `Advisor, subagents and independent reviews; preserve acceptance checks`. This is optional user context, not a hardcoded policy. The plugin remembers it in memory for that session, not across process restarts.
+## 历史与运行时的边界
 
-Default exports include structured facts, scope, historical configuration, pricing provenance, diagnostic candidate evidence and unknowns. They omit conversation text, thinking content, credentials, session titles and absolute paths; agent names are pseudonymized. Optional evidence adds only bounded, redacted visible-text excerpts and reviewed labels. **Automatic redaction is not guaranteed. Review before sharing.**
+升级前的调用仍可读取角色、任务、用量、价格及现有结构化证据；**旧日志未采集的请求时长、首个输出和明确裁决不能补造**。运行时数据从安装并加载观察器后开始写入，每份源会话对应 `.cost-events.ndjson` 辅助日志；命名基线与分析档案存放在根会话旁的 `.cost-state` 目录，不修改原始会话内容。
 
-Very large previews are explicitly limited, but the exported payload is not truncated. Excerpt-mode copying is disabled when the entire indexed excerpt payload exceeds the preview; save it for full local review. Saves use mode 0600 and never overwrite an existing file. Native clipboard tools are preferred; large payloads do not fall back to undersized OSC 52, whose receipt cannot be acknowledged.
+请求钩子观察不保证后续扩展没有修改请求，也不等同于供应商执行证明。请求到输出包含网络、供应商和运行时开销，不是纯推理时长。只存在消息时间差时仍叫“活动间隔”。唯一精确内容可以关联 Advisor 事件，重复内容不猜对应哪个交付，时间相近不证明关系。
 
-## Diagnostic boundaries
+没有结构化 review/finding/decision 时，原始 reviewer 名称和任务成本仍可查看，但状态字段明确未记录。插件支持 OMP 已存在的结构化工具结果，以及下文文档中的明确观察协议；不会为凑齐字段自动调用模型、改写 RULES、唤醒主控或把某个 Reviewer 的发现提前传给其他 Reviewer。
 
-A repeated empty-status result is a **candidate**, not guaranteed waste or net savings. A six-hour message-to-record gap is not six hours of model inference or billing. Compaction before/after inputs are observations, not controlled quality-neutral savings. Historical thinking settings are not proof of the provider's actual request effort. Unknown tool spellings and missing metadata remain unknown.
+## 性能和数据一致性
 
-The snapshot freezes file byte limits sequentially; it is **not atomic across files**. Incomplete tails and malformed/unavailable records are counted. The detailed contract, schemas, privacy policy, supported detection grammar and exact filtering semantics are in [docs/diagnostics.md](docs/diagnostics.md).
+JSONL 逐行读取，启动扫描前冻结文件字节上限，尾部不完整记录和异常文件单独报告。跨文件不是原子快照。缓存只复用文件列表及 inode／大小／修改和变更时间未变化的已解析快照；文件追加、重写、新文件和 `refresh` 会使它失效，缓存命中仍重新读取价格。缓存至多保留一个不超过 50,000 次调用、150,000 个事件的标准化快照，不缓存原始请求正文。
 
-## Development
+这不是“任意追加都只解析增量”的承诺。变化后的树会重新索引，以保留分支、任务和父链的一致性。任务行、时间窗口行和主体行分别守恒；父任务汇总不能和其明细再次相加。分叉继承与去重依赖明确记录，不按内容相似随意删除真实调用。
+
+## 开发与验证
 
 ```sh
-git clone https://github.com/xiangnan0811/omp-session-cost
-cd omp-session-cost
+npm test
 npm run check
-npm run check:large
+node scripts/benchmark.mjs 20000
 node scripts/example.mjs dist
 npm pack --pack-destination dist
-node scripts/verify-package.mjs dist/omp-session-cost-0.6.0.tgz
+node scripts/verify-package.mjs dist/omp-session-cost-0.7.0.tgz
 ```
 
-For local OMP development:
+打包用于 CI 验证，不作为用户升级交付。CI 还在 Bun 下检查只读 SQLite、旧数据库结构兼容和扩展注册。测试、公开示例及基准全部使用合成数据，发布不包含用户会话。
 
-```sh
-omp plugin link .
-```
-
-Tests and public example reports use synthetic fixtures only. The GitHub release includes the validated package and synthetic diagnostic examples, not user transcripts. GitHub installation does not require npm-registry publication.
-
-## License
-
-MIT
+更多字段与观察协议见 [诊断格式文档](docs/diagnostics.md)。MIT License。

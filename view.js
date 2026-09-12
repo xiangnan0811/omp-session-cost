@@ -8,6 +8,8 @@ import {
 } from "./format.js";
 import { copyOptions, buildCopyPayload } from "./export.js";
 import { scopeReport, selectionFilter } from "./core.js";
+import { makeBaseline, bookmarkFor, compareBaseline } from "./baseline.js";
+import { taskRows, runtimeRows, comparisonRows } from "./advanced-pages.js";
 import { cleanText } from "./diagnostics.js";
 import {
   advisorRows,
@@ -26,6 +28,9 @@ const TABS = Object.freeze([
   { id: "agents", label: "Agents", short: "Agents" },
   { id: "advisors", label: "Advisors", short: "Advisors" },
   { id: "details", label: "Details", short: "Details" },
+  { id: "tasks", label: "任务", short: "任务" },
+  { id: "runtime", label: "时序", short: "时序" },
+  { id: "compare", label: "对比", short: "对比" },
 ]);
 
 const PALETTE = ["accent", "success", "warning", "mdLink", "mdCode", "thinkingMedium", "thinkingHigh", "toolTitle"];
@@ -212,6 +217,9 @@ export class CostExplorerView {
     if (id === "models") return modelRows(this, width);
     if (id === "agents") return agentRows(this, width);
     if (id === "advisors") return advisorRows(this, width);
+    if (id === "tasks") return taskRows(this, width);
+    if (id === "runtime") return runtimeRows(this);
+    if (id === "compare") return comparisonRows(this);
     return detailsRows(this, width);
   }
 
@@ -381,7 +389,7 @@ export class CostExplorerView {
   exportContext() {
     const p = this.preview;
     let report = this.report;
-    const clearActors = { actorType: undefined, agent: undefined, advisorKey: undefined, provider: undefined, modelId: undefined };
+    const clearActors = { actorType: undefined, agent: undefined, advisorKey: undefined, provider: undefined, modelId: undefined, taskKey: undefined, role: undefined, instanceId: undefined, phase: undefined, status: undefined };
     if (p.scope === "main") report = scopeReport(report, { ...clearActors, actorType: "main" });
     else if (p.scope === "all") report = scopeReport(report, clearActors);
     else if (p.scope === "selection") report = scopeReport(report, { ...clearActors, ...selectionFilter(p.selection) });
@@ -454,8 +462,9 @@ export class CostExplorerView {
       } catch (error) { this.toast = `Save failed: ${cleanText(error.message)}`; }
       finally { this.busy = false; }
     } else {
-      this.profile[edit.field] = edit.value;
-      this.callbacks.onProfile?.({ ...this.profile });
+      const profile = { ...this.profile, [edit.field]: edit.value };
+      try { await this.callbacks.onProfile?.(profile); this.profile = profile; }
+      catch (error) { this.toast = `保存分析档案失败：${cleanText(error.message)}`; this.requestRender(); return; }
     }
     this.modal = edit.parent; this.editing = null;
     if (edit.field !== "savePath") this.rebuildPreview();
@@ -470,23 +479,27 @@ export class CostExplorerView {
 
   applyScope() {
     try {
-      const clearActors = { actorType: undefined, agent: undefined, advisorKey: undefined, provider: undefined, modelId: undefined };
+      const clearActors = { actorType: undefined, agent: undefined, advisorKey: undefined, provider: undefined, modelId: undefined, taskKey: undefined, role: undefined, instanceId: undefined, phase: undefined, status: undefined };
       const options = this.scopeMode === "current" ? {} : this.scopeMode === "main" ? { ...clearActors, actorType: "main" } : clearActors;
-      if (this.sinceBookmark && this.bookmark) { options.sinceKeys = this.bookmark.callKeys; options.sinceEventKeys = this.bookmark.eventKeys; }
+      if (this.sinceBookmark && this.bookmark) { options.sinceKeys = this.bookmark.callKeys; options.sinceEventKeys = this.bookmark.eventKeys; options.sinceRuntimeKeys = this.bookmark.runtimeKeys; }
       this.report = Object.keys(options).length ? scopeReport(this.baseReport, options) : this.baseReport;
+      if (this.bookmark?.baseline) this.report.comparison = compareBaseline(this.report, this.bookmark.baseline);
       this.rebuildColors();
       this.toast = `Scope ${this.scopeMode}${this.sinceBookmark ? " since bookmark" : ""}: ${this.report.total.calls} calls`;
     } catch (error) { this.toast = cleanText(error.message); }
     this.requestRender();
   }
 
-  markSnapshot() {
-    const scan = this.baseReport._sourceScan;
-    this.bookmark = { sessionId: this.baseReport.sessionId, callKeys: new Set((scan?.calls || this.baseReport.calls || []).map(c => c.recordKey)),
-      eventKeys: new Set((scan?.events || []).map(e => e.key)), frozenAt: this.baseReport.snapshot?.frozenAt || this.baseReport.generatedAt };
-    this.callbacks.onBookmark?.(this.bookmark);
-    this.toast = `Bookmark saved in memory: ${this.bookmark.callKeys.size} records; w toggles newly observed records.`;
-    this.requestRender();
+  async markSnapshot() {
+    if (this.busy) return;
+    const next = bookmarkFor(makeBaseline(this.baseReport, this.bookmark?.name));
+    this.busy = true;
+    try {
+      this.bookmark = this.callbacks.onBookmark ? await this.callbacks.onBookmark(next) || next : next;
+      this.report.comparison = compareBaseline(this.report, this.bookmark.baseline);
+      this.toast = `基线「${this.bookmark.name}」${this.callbacks.onBookmark ? "已保存" : "已标记（仅内存）"}：${this.bookmark.callKeys.size} 条；w 查看新增。`;
+    } catch (error) { this.toast = `保存基线失败：${cleanText(error.message)}`; }
+    finally { this.busy = false; this.requestRender(); }
   }
 
   async refresh() {
@@ -589,7 +602,7 @@ export class CostExplorerView {
       this.collapseOrParent();
       return;
     }
-    if (/^[1-6]$/.test(data)) {
+    if (/^[1-9]$/.test(data)) {
       this.selectTab(Number(data) - 1);
       return;
     }
@@ -605,7 +618,7 @@ export class CostExplorerView {
     else if (data === "c" || data === "C") this.openCopy();
     else if (data === "d" || data === "D") this.openPreview("selection", true);
     else if (data === "f" || data === "F") this.cycleScope();
-    else if (data === "b" || data === "B") this.markSnapshot();
+    else if (data === "b" || data === "B") void this.markSnapshot();
     else if (data === "w" || data === "W") {
       if (!this.bookmark) { this.toast = "No bookmark. Press b to mark this snapshot first."; this.requestRender(); }
       else { this.sinceBookmark = !this.sinceBookmark; this.applyScope(); }

@@ -12,7 +12,7 @@ export async function freezeFiles(files) {
   for (const file of files) {
     try {
       const stat = await fs.stat(file);
-      descriptors.push({ file, size: stat.size, mtimeMs: stat.mtimeMs, ino: stat.ino, frozenAt: Date.now() });
+      descriptors.push({ file, size: stat.size, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs, ino: stat.ino, frozenAt: Date.now() });
     } catch (error) {
       descriptors.push({ file, size: 0, unavailable: error?.code || "unavailable", frozenAt: Date.now() });
     }

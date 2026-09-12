@@ -1,4 +1,7 @@
 import * as path from "node:path";
+import { attributeScan } from "./ledger.js";
+import { sidecarPath } from "./runtime.js";
+import { readRuntime, attachRuntime } from "./telemetry.js";
 import { buildAggregates } from "./aggregate.js";
 import { finite, slugify } from "./format.js";
 import { freezeFiles, visitFrozen } from "./snapshot.js";
@@ -70,8 +73,8 @@ function advisorKeyForNote(ownerAgent, advisorName, descriptors) {
 }
 
 function extractCall(entry, file, rootFile, identity, cutoffMs) {
-  if (entry.type !== "message") return null;
-  const message = entry.message;
+  if (entry.type !== "message" && entry.type !== "model_usage") return null;
+  const message = entry.type === "model_usage" ? { ...entry, role: "assistant", content: [] } : entry.message;
   if (!message || message.role !== "assistant" || !message.usage || typeof message.usage !== "object") return null;
   const provider = typeof message.provider === "string" ? message.provider : "unknown";
   const model = typeof message.model === "string" ? message.model : "unknown";
@@ -143,6 +146,9 @@ function dedupeCalls(calls) {
   return { calls: [...buckets.values()].flat(), duplicates };
 }
 
+// One bounded normalized snapshot, never raw provider payloads. Repricing is always fresh.
+let parsedSnapshotCache = null;
+export function clearParsedSnapshotCache() { parsedSnapshotCache = null; }
 export async function collectSessionData(sessionFile, pi, ctx, forceRefresh = false) {
   const rootSessionFile = await resolveInteractiveRoot(sessionFile);
   if (!await exists(rootSessionFile)) throw new Error(`Session transcript is not on disk yet: ${rootSessionFile}`);
@@ -154,7 +160,20 @@ export async function collectSessionData(sessionFile, pi, ctx, forceRefresh = fa
   const candidates = [rootSessionFile, ...await collectTranscriptsRecursive(transcriptStem(rootSessionFile))]
     .map(file => path.resolve(file));
 
-  const snapshot = await freezeFiles(candidates);
+  const sidecars = [];
+  for (const file of candidates) if (await exists(sidecarPath(file))) sidecars.push(sidecarPath(file));
+  const snapshot = await freezeFiles([...candidates, ...sidecars]);
+  let cacheContext;
+  try { cacheContext = [ctx?.model?.provider, ctx?.model?.id, pi?.getThinkingLevel?.(), ctx?.sessionManager?.getLeafId?.()]; } catch { cacheContext = null; }
+  const cacheKey = digest([rootSessionFile, cacheContext, snapshot.descriptors.map(d => [d.file, d.ino, d.size, d.mtimeMs, d.ctimeMs, d.unavailable])]);
+  if (!forceRefresh && parsedSnapshotCache?.key === cacheKey) {
+    const source = parsedSnapshotCache.scan;
+    const calls = source.calls.map(c => ({ ...c, selectedCost: c.transcriptCost, statsCost: null, cost: normalizeCost(c.transcriptCost),
+      priceStatus: c.transcriptCost?.total == null ? "missing" : c.transcriptCost.total === 0 ? "explicit-zero" : "recorded",
+      costSource: c.transcriptCost?.total == null ? "missing" : "transcript" }));
+    const pricing = await enrichCosts(calls, rootSessionFile, pi, ctx, false);
+    return { ...source, calls, pricing, metadata: { ...source.metadata, parsedSnapshotCache: "hit: unchanged metadata; prices reread", cacheCheckedAt: Date.now() } };
+  }
   const indexer = createDiagnosticIndexer();
   const scanFiles = [];
   const activityTimeline = [];
@@ -318,7 +337,9 @@ export async function collectSessionData(sessionFile, pi, ctx, forceRefresh = fa
       "In-place rewrites during an append cannot be completely ruled out without writer cooperation.",
       "Recorded spend includes abandoned paths; active-main-path mode excludes descendants whose branch association is not proven."]
   };
-  return {
+  const telemetry = await readRuntime(snapshot.descriptors.filter(d => sidecars.includes(d.file)), valid);
+  const scan = attributeScan(attachRuntime({
+    sessionTitle: events.findLast(e => e.agentType === "main" && e.kind === "title-change")?.title || rootHeader.title || null, runtimeEvents: telemetry.events, runtimeFiles: telemetry.files, runtimeCoverage: telemetry.coverage,
     rootSessionFile,
     sessionId: typeof rootHeader.id === "string" && rootHeader.id ? rootHeader.id : path.basename(transcriptStem(rootSessionFile)),
     calls: deduped.calls,
@@ -331,6 +352,7 @@ export async function collectSessionData(sessionFile, pi, ctx, forceRefresh = fa
     advisorDescriptors,
     pricing,
     metadata: {
+      parsedSnapshotCache: "miss: source reindexed",
       filesScanned: valid.length,
       filesDiscovered: candidates.length,
       skippedInvalidFiles,
@@ -345,7 +367,11 @@ export async function collectSessionData(sessionFile, pi, ctx, forceRefresh = fa
       unavailableFiles: snapshot.descriptors.filter(f => f.unavailable).length + scanFiles.filter(f => f.unavailable).length,
       missingTimestamps: events.filter(e => !e.timestamp).length,
     },
-  };
+  }));
+  if (scan.calls.length <= 50000 && scan.events.length <= 150000 && !scan.metadata.changedFiles && !scan.metadata.unavailableFiles && !scan.runtimeCoverage.changedFiles) {
+    parsedSnapshotCache = { key: cacheKey, scan };
+  } else parsedSnapshotCache = null;
+  return scan;
 }
 
 export async function buildReport(sessionFile, pi = {}, ctx = {}, forceRefresh = false, options = {}) {
@@ -356,6 +382,10 @@ export async function buildReport(sessionFile, pi = {}, ctx = {}, forceRefresh =
 export function selectionFilter(selection) {
   const row = selection?.row;
   if (!row) return {};
+  if (selection.kind === "Task") return { taskKey: row.id };
+  if (selection.kind === "Task agent") return { taskKey: row.taskKey, agent: row.agent };
+  if (selection.kind === "Role model") return { role: row.role, actorType: row.actorType, modelId: `${row.provider}/${row.model}` };
+  if (selection.kind === "Instance") return { instanceId: row.id };
   if (selection.kind === "Advisor") return { advisorKey: row.id };
   if (row.modelId) return { modelId: row.modelId, agent: row.agent || row.name };
   if (row.model && row.provider) return { modelId: `${row.provider}/${row.model}`, ...(row.agent ? { agent: row.agent } : {}) };
@@ -404,10 +434,13 @@ export function scopeReport(report, options = {}) {
   };
   const calls = allCalls.filter(c => matchesActor(c) && matchesTime(c) &&
     (!options.provider || c.provider === options.provider) && (!options.modelId || `${c.provider}/${c.model}` === options.modelId) &&
+    (options.role === undefined || c.role === options.role) && (!options.instanceId || c.instanceId === options.instanceId) &&
+    (!options.taskKey || c.taskKey === options.taskKey || c.taskName === options.taskKey) && (!options.phase || c.workPhase === options.phase) && (!options.status || c.stopStatus === options.status) &&
     (!activeKeys || (c.agentType === "main" && activeKeys.has(c.recordKey))) && !options.sinceKeys?.has(c.recordKey));
   const callKeys = new Set(calls.map(c => c.recordKey));
   const agents = new Set(calls.map(c => c.agent));
-  const events = allEvents.filter(e => !e.inherited && matchesTime(e) && matchesActor(e) &&
+  const events = allEvents.filter(e => (options.role === undefined || e.role === options.role) && (!options.instanceId || e.instanceId === options.instanceId) &&
+    (!options.taskKey || e.taskKey === options.taskKey || e.taskName === options.taskKey) && (!options.phase || e.workPhase === options.phase) && !e.inherited && matchesTime(e) && matchesActor(e) &&
     (!activeKeys || (e.agentType === "main" && activeKeys.has(e.key))) && !options.sinceEventKeys?.has(e.key) &&
     ((!options.provider && !options.modelId) || agents.has(e.agent)) &&
     (e.kind !== "assistant" || callKeys.has(e.key) || (!e.usage?.carryingUsage && (!options.provider || e.provider === options.provider) && (!options.modelId || `${e.provider}/${e.model}` === options.modelId))));
@@ -451,8 +484,14 @@ export function scopeReport(report, options = {}) {
   if (!original.activityTimeline && !from && !to && !options.sinceKeys) {
     for (const [key, value] of original.advisorActivity || []) if (allowedAdvisorKeys.has(key)) activity.set(key, value);
   }
-  const scoped = buildAggregates({ ...original, calls: relevantCalls, events,
-    advisorActivity: activity, contextEvents: original.events, scope: { ...options, sinceKeys: undefined, sinceEventKeys: undefined, from: from || null, to: to || null,
+  const relatedRuntimeIds = new Set(calls.flatMap(c => [c.runtimeStartId, c.runtimeEndId].filter(Boolean)));
+  const selectedToolIds = new Set(calls.flatMap(c => (c.toolFacts || []).map(t => `${c.sessionFile}\u0000${t.id}`)));
+  const runtimeSubjectRestricted = Boolean(activeKeys || options.taskKey || options.phase || options.status || options.provider || options.modelId || options.instanceId || options.role !== undefined);
+  const runtimeEvents = (original.runtimeEvents || []).filter(f => matchesActor(f) && matchesTime(f) && !options.sinceRuntimeKeys?.has(f.id) &&
+    (!runtimeSubjectRestricted || callKeys.has(f.callKey) || relatedRuntimeIds.has(f.id) || selectedToolIds.has(`${f.sourceFile}\u0000${f.toolCallId}`)));
+  const scoped = buildAggregates({ ...original, calls: relevantCalls, events, runtimeEvents, contextRuntimeEvents: original.runtimeEvents,
+
+    advisorActivity: activity, contextEvents: original.events, scope: { ...options, sinceKeys: undefined, sinceEventKeys: undefined, sinceRuntimeKeys: undefined, from: from || null, to: to || null,
       afterEventKey: eventBounds.afterEvent?.key || null, beforeEventKey: eventBounds.beforeEvent?.key || null,
       branch: options.branch || "recorded-spend", denominator: "selected calls", selectedCalls: calls.length,
       baselineExcluded: options.sinceKeys ? allCalls.filter(c => options.sinceKeys.has(c.recordKey)).length : 0,

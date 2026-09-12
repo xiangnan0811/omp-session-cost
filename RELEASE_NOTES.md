@@ -1,29 +1,29 @@
-# omp-session-cost v0.6.0
+## omp-session-cost 0.7.0
 
-## Diagnostic reports that travel with their evidence
+原始名称、任务总账、持久化基线、中文完整分析包与运行时诊断一起交付。
 
-The default copied bundle now explains the selected scope, historical configuration, input/output/cache cost composition, price provenance, measurement coverage, observed work segments and diagnostic limits. A selected main/model/agent report receives the same complete semantics, rather than only aggregate totals.
+### 本版内容
 
-### Included
+- 直接保留原始 agent、角色、任务、阶段、模型、会话和证据名称，移除 Agent-N 匿名化。
+- 任务含后代总账与时间窗口分开；嵌套委派、复用代理、共享 Advisor 均有明确归属口径。
+- 任务、角色 × 模型、实例具备输入／缓存读写／输出及价格覆盖、上下文分布；支持 `model_usage` 辅助调用。
+- 命名基线可持久保存、重启恢复、查看增量和前后对比；旧价格不被新价格覆盖。
+- 默认中文报告自包含，保留原始 ID、角色和委派证据；全量汇总与明确抽样分开，完整 Markdown／JSON 保留全部记录，格式升级到 v3。
+- 被动运行时采集请求、首个输出、响应头、工具、原生等待、审批、重试和压缩；重复／歧义关联不造数。
+- Advisor 的产生、交付、请求观察、明确处置和动作分开；接受不等于 blocker 关闭。
+- 支持结构化审查轮次、finding 状态与验收；压缩前后窗口与辅助调用单列。
+- 保留半屏、主题、焦点、Esc 和现有六个标签页，新增任务／时序／对比页；复用未变化的解析快照，价格仍重新读取。
 
-- Historical model/thinking events, recorded request-effort coverage and separate current context.
-- Nonzero/known-zero/missing-usage distinctions, interruption/error counts, reasoning-as-output detail and input distributions.
-- Preserved transcript and database cost estimates alongside adopted values.
-- Frozen per-file prefix snapshots, call/event manifests, time/event/actor/model filters, active-main-path mode and in-memory bookmarks.
-- Strict repeated-status candidates, incoming-to-next-main-record intervals and observed compaction inputs, with explicit evidence and no guaranteed-savings or causal claims.
-- User question/protected scopes, local copy preview, optional reviewed redacted excerpts, complete schema-2 JSON/Markdown and save fallback.
-- Existing bottom-anchored 52% six-tab explorer, theme focus and keyboard behavior retained; `d` opens full subject diagnostics.
-
-### Update
+### 正常升级
 
 ```sh
-omp plugin install github:xiangnan0811/omp-session-cost
+omp plugin install "github:xiangnan0811/omp-session-cost#v0.7.0"
 ```
 
-Restart OMP. Use `/cost main`, press `d` for subject details, or `c` then Enter to preview a bundle. Enter again copies. In preview: `g` question, `p` protected scopes, `e` excerpts, `s` save.
+之后重启 OMP，再执行 `/cost` 检查版本。无需下载压缩包或手工覆盖文件。Release 的示例均为合成数据，不含用户日志；内部打包仅用于验证发布文件完整性。
 
-### Compatibility and limits
+### 验证与边界
 
-JSON schema is now **2**. Bookmarks and analysis context are session/process memory only. Prices remain API-equivalent estimates, not subscription charges or quota. Missing historical fields remain unknown. Snapshots are sequential file prefixes, not atomic transactions. Evidence redaction requires review; oversized excerpt payloads must be saved for full inspection. No analysis model, new runtime dependency or eager OMP/native import is introduced.
+发布前执行完整 Node 测试、语法检查、20,000 条调用合成基准、隔离打包导入／注册验证，以及 CI Bun／SQLite 集成检查。
 
-The attached examples are entirely synthetic. Offline/unit/packaging checks do not claim live validation on every OMP version or terminal, actual provider effort, or the engineering value of a user's work.
+升级前未采集的运行时事件不能补造，新增遥测从观察器加载后开始。结构化 decision／finding 缺失时明确未记录，不把下一次回复当作裁决。费用是 API 等价估算，不代表订阅扣款或剩余额度。插件不改变模型、Advisor、独立三审、等待或验收规则。

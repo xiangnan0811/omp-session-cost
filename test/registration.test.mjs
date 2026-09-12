@@ -12,9 +12,9 @@ test("public entry registers /cost", () => {
   assert.equal(typeof commands.get("cost")?.handler, "function");
 });
 
-test("manifest publishes v0.6.0 and points to structured explorer entry", () => {
+test("manifest publishes v0.7.0 and points to structured explorer entry", () => {
   const pkg = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"));
-  assert.equal(pkg.version, "0.6.0");
+  assert.equal(pkg.version, "0.7.0");
   assert.deepEqual(pkg.omp.extensions, ["./index.js"]);
   for (const file of ["core.js", "aggregate.js", "format.js", "export.js", "view.js"]) assert.ok(pkg.files.includes(file));
 });
@@ -95,8 +95,8 @@ test("headless command reports a compact summary", async () => {
       sessionManager: { getSessionFile: () => session },
       ui: { setStatus() {}, notify(message, type) { notifications.push({ message, type }); } },
     });
-    assert.match(notifications[0].message, /1 LLM calls/);
-    assert.match(notifications[0].message, /API-equivalent/);
+    assert.match(notifications[0].message, /1 条用量记录/);
+    assert.match(notifications[0].message, /API 等价/);
   } finally {
     await removeDir(dir);
   }

@@ -233,7 +233,7 @@ export function detailsRows(view) {
   const p = view.report.pricing ?? {};
   const rows = [
     view.heading("SESSION"),
-    view.detail(`Schema 2 diagnostics · scope ${view.report.scope?.branch || "recorded-spend"} · copied names are pseudonymized`, 0),
+    view.detail(`Schema 3 diagnostics · scope ${view.report.scope?.branch || "recorded-spend"} · 原始名称直接导出`, 0),
     view.detail(`Snapshot frozen       ${formatTimestamp(view.report.snapshot?.frozenAt || 0)}`, 0),
     view.detail(`Local manifest digest ${view.report.scope?.manifestDigest || view.report.snapshot?.recordManifestDigest || "not recorded"}`, 0),
     view.detail(`ID                    ${view.report.sessionId}`, 0, "text"),

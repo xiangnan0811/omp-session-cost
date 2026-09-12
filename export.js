@@ -3,23 +3,23 @@ import { buildDiagnosticData, diagnosticMarkdown } from "./diagnostic-export.js"
 import { scopeReport, selectionFilter } from "./core.js";
 
 const COPY_OPTIONS = Object.freeze([
-  { id: "brief", label: "AI diagnostic bundle", description: "Self-contained scope, history, costs, candidates and limitations; preview before copying" },
-  { id: "selection", label: "Current selection", description: "A self-contained diagnostic bundle for the selected subject" },
-  { id: "tab", label: "Current tab", description: "Current tab with complete scope and metric definitions" },
-  { id: "markdown", label: "Full Markdown report", description: "Complete call/event manifest and all indexed evidence; no silent truncation" },
-  { id: "json", label: "Full JSON", description: "Schema v2: facts, events, history, provenance and candidate record sets" },
+  { id: "brief", label: "中文分析报告", description: "原始名称、任务归属、价格、时序与证据" },
+  { id: "selection", label: "当前主体", description: "当前主体的自包含分析报告" },
+  { id: "tab", label: "当前标签页", description: "当前标签页，保留统计范围与指标定义" },
+  { id: "markdown", label: "完整 Markdown 报告", description: "全部调用、事件与运行时证据，不静默截断" },
+  { id: "json", label: "完整 JSON", description: "格式 v3：完整事实、归因、历史、时序与证据" },
 ]);
 export function copyOptions() { return COPY_OPTIONS.map(option => ({ ...option })); }
-export function buildAiBrief(report, options = {}) { return diagnosticMarkdown(buildDiagnosticData(report, options)); }
+export function buildAiBrief(report, options = {}) { return diagnosticMarkdown(buildDiagnosticData(report, options), options); }
 export function buildSelectionMarkdown(report, selection, options = {}) {
   const selected = scopeReport(report, selectionFilter(selection));
-  return diagnosticMarkdown(buildDiagnosticData(selected, options));
+  return diagnosticMarkdown(buildDiagnosticData(selected, options), options);
 }
 export function buildTabMarkdown(report, tabId, options = {}) {
-  return `<!-- Current tab: ${["overview", "providers", "models", "agents", "advisors", "details"].includes(tabId) ? tabId : "overview"} -->\n` + buildAiBrief(report, options);
+  return `<!-- 当前标签页：${["overview", "providers", "models", "agents", "advisors", "details", "tasks", "runtime", "compare"].includes(tabId) ? tabId : "overview"} -->\n` + buildAiBrief(report, options);
 }
-export function buildFullMarkdown(report, options = {}) { return diagnosticMarkdown(buildDiagnosticData(report, options), { full: true }); }
-export function buildPublicJson(report, options = {}) { return JSON.stringify(buildDiagnosticData(report, options), null, 2) + "\n"; }
+export function buildFullMarkdown(report, options = {}) { return diagnosticMarkdown(buildDiagnosticData(report, options), { ...options, full: true }); }
+export function buildPublicJson(report, options = {}) { return JSON.stringify(buildDiagnosticData(report, options), null, options.pretty ? 2 : 0) + "\n"; }
 export function buildCopyPayload(report, mode, context = {}) {
   if (mode === "selection") return buildSelectionMarkdown(report, context.selection, context);
   if (mode === "tab") return buildTabMarkdown(report, context.tabId, context);

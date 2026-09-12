@@ -17,33 +17,33 @@ test("copy menu exposes five analysis-oriented formats", () => {
 
 test("AI brief is self-explaining and labels call/token/cost shares", () => {
   const text = buildAiBrief(fixtureReport());
-  assert.match(text, /Metric definitions/);
-  assert.match(text, /Call share/);
-  assert.match(text, /Token share/);
-  assert.match(text, /Cost share/);
-  assert.match(text, /Actor types/);
-  assert.match(text, /Providers/);
+  assert.match(text, /统计范围/);
+  assert.match(text, /调用占比/);
+  assert.match(text, /Token 占比/);
+  assert.match(text, /金额占比/);
+  assert.match(text, /主体类型/);
+  assert.match(text, /提供商/);
   assert.match(text, /Advisors/);
   assert.match(text, /Review updates/);
-  assert.match(text, /Strict repeated-status candidates/);
+  assert.match(text, /严格重复状态候选/);
 });
 
-test("AI brief excludes local transcript and stats database paths", () => {
+test("AI brief preserves meaningful source paths and omits stats database internals", () => {
   const text = buildAiBrief(fixtureReport());
-  assert.doesNotMatch(text, /\/home\/alice/);
+  assert.match(text, /\/home\/alice/);
   assert.doesNotMatch(text, /stats\.db/);
-  assert.doesNotMatch(text, /private\/main\.jsonl/);
+  assert.match(text, /private\/main\.jsonl/);
 });
 
-test("public JSON excludes sensitive path and database error fields", () => {
+test("public JSON preserves original identity and excludes database error fields", () => {
   const text = buildPublicJson(fixtureReport());
   const json = JSON.parse(text);
-  assert.match(json.sessionId, /^S[0-9a-f]{20}$/);
-  assert.equal(json.schemaVersion, 2);
-  assert.equal("rootSessionFile" in json, false);
+  assert.match(json.sessionId, /^fixture-session$/);
+  assert.equal(json.schemaVersion, 3);
+  assert.equal("rootSessionFile" in json, true);
   assert.equal("dbPath" in json.pricing, false);
   assert.equal("dbError" in json.pricing, false);
-  assert.doesNotMatch(text, /\/home\/alice/);
+  assert.match(text, /\/home\/alice/);
 });
 
 test("selection export includes focused row and child attribution", () => {
@@ -51,30 +51,30 @@ test("selection export includes focused row and child attribution", () => {
   const model = report.models.find(row => row.name === "xai-oauth/grok-4.6");
   const text = buildSelectionMarkdown(report, { kind: "Model", row: model });
   assert.match(text, /xai-oauth\/grok-4\.6/);
-  assert.match(text, /All primary agents/);
-  assert.match(text, /Agent-3/);
-  assert.match(text, /Agent-4/);
+  assert.match(text, /主控与子代理/);
+  assert.match(text, /Frontend/);
+  assert.match(text, /main > advisor/);
 });
 
 test("tab export selects the active dimension", () => {
   const text = buildTabMarkdown(fixtureReport(), "providers");
-  assert.match(text, /Current tab: providers/);
+  assert.match(text, /当前标签页：providers/);
   assert.match(text, /openai-codex/);
   assert.match(text, /xai-oauth/);
 });
 
 test("full Markdown contains complete model to agent attribution", () => {
   const text = buildFullMarkdown(fixtureReport());
-  assert.match(text, /Model → agent attribution/);
+  assert.match(text, /模型 → agent 原名/);
   assert.match(text, /gpt-5\.6-sol/);
-  assert.match(text, /Agent-2/);
+  assert.match(text, /Backend/);
 });
 
 test("copy payload dispatcher maps all menu modes", () => {
   const report = fixtureReport();
-  assert.match(buildCopyPayload(report, "brief"), /Analysis Bundle/);
-  assert.match(buildCopyPayload(report, "tab", { tabId: "agents" }), /Current tab: agents/);
-  assert.match(buildCopyPayload(report, "markdown"), /All primary agents/);
+  assert.match(buildCopyPayload(report, "brief"), /会话成本分析报告/);
+  assert.match(buildCopyPayload(report, "tab", { tabId: "agents" }), /当前标签页：agents/);
+  assert.match(buildCopyPayload(report, "markdown"), /主控与子代理/);
   assert.doesNotThrow(() => JSON.parse(buildCopyPayload(report, "json")));
 });
 
