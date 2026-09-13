@@ -1,6 +1,6 @@
 {
   "name": "omp-session-cost",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "OMP session cost, task attribution, passive runtime diagnostics, and named baselines with original names.",
   "type": "module",
   "license": "MIT",
@@ -60,7 +60,8 @@
     "request-tracker.js",
     "lineage.js",
     "evidence-package.js",
-    "verify-export.js"
+    "verify-export.js",
+    "outcomes.js"
   ],
   "scripts": {
     "check": "node scripts/check.mjs && node --test test/*.test.mjs",

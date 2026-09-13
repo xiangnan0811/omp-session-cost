@@ -5,6 +5,14 @@
 **原始名称直接保留。** Agent、角色、任务、阶段、模型、会话和证据文件名称不会被替换为 `Agent-N`。费用是 **API 等价估算**，不是订阅扣款、剩余额度或供应商对账结果。
 
 
+## 0.9.1：执行交付、独立验收与缺失用量
+
+没有用量记录的代理不再从实例清单中消失；有明确父委派证据的无用量父代理也能建立下属关系。`0 条用量`只表示没有可计入的用量记录，不表示免费、没有运行或验收通过。
+
+原生任务最终返回与进度快照分开，保留退出码、结构化输出验证状态、最终文本和证据来源。文本按字段保留最多 8192 个 UTF-16 字符，标明原始长度、插件截取与上游截取；凭据按原有规则脱敏。`acceptance` 即使没有 `roundId` 也独立展示，嵌套工具的结构化观察同样保留。**模型调用成功、工具退出成功、输出格式有效和工程验收通过不是同一件事。**验收记录是来源中的明确声明，不是插件替用户重新运行测试。
+
+历史筛选只使用选定范围内的生命周期与追加指令，不借用后来的完成状态。工具区间没有任何结束事件时，并集时长显示未知；真正测得的零时长仍为零。
+
 ## 0.9.0：请求隔离、任务证据与可重放账本
 
 采集请求不再共用一个“当前请求”槽位。按实际提供商、模型和主控回合／压缩作用域隔离，保留同模型并发歧义；响应头不当作请求完成。恢复运行时重新观察请求中的系统提示与工具定义指纹，不把主控提示补给未观察到的辅助请求。
@@ -22,10 +30,10 @@ npm run verify:report -- /path/to/report.md
 
 覆盖缺口分别展示：普通用量、任务归属、请求时长、压缩自身用量、提示版本和价格交叉验证。未匹配的请求观察不混入调用／成本总计。封装 `eval` 的内部等待缺少实际区间时标为不可见，不能因为时长接近 300 秒就认定是等待。Advisor 按建议和卡片分别统计，只有明确 `supersedes` 才记录替代关系，不推断采纳或修复完成。
 
-## 安装或升级到 0.9.0
+## 安装或升级到 0.9.1
 
 ```sh
-omp plugin install "github:xiangnan0811/omp-session-cost#v0.9.0"
+omp plugin install "github:xiangnan0811/omp-session-cost#v0.9.1"
 ```
 
 安装后重启 OMP，使观察器在该进程中加载；执行 `/cost` 可核对版本。已经运行的其他 OMP 进程也需要分别重新加载插件，不能假定它们自动切换。
@@ -108,7 +116,7 @@ node scripts/example.mjs dist
 node scripts/verify-report.mjs dist/example-diagnostic.md
 node scripts/verify-report.mjs dist/example-diagnostic.json
 npm pack --pack-destination dist
-node scripts/verify-package.mjs dist/omp-session-cost-0.9.0.tgz
+node scripts/verify-package.mjs dist/omp-session-cost-0.9.1.tgz
 ```
 
 打包先经过隔离导入、注册及离线验证器检查，再作为 GitHub Release 附件保留；正常升级仍使用上述插件渠道。CI 还在 Bun 下检查只读 SQLite、旧数据库结构兼容和扩展注册。测试、公开示例及基准全部使用合成数据，发布不包含用户会话。

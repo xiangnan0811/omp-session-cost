@@ -65,7 +65,7 @@ export function buildDiagnosticData(report, options = {}) {
   }));
   const selectedEventKeys = new Set((report.events || []).map(e => e.key));
   const historyKeys = new Set(sourceCalls.flatMap(c => [c.historicalThinking?.eventKey, c.historicalModel?.eventKey, c.phaseKey, c.taskKey, c.historicalInit?.eventKey, ...(c.assignmentEvidence || [])]).filter(Boolean));
-  for (const item of [...(report.telemetry?.notes || []), ...(report.telemetry?.reviews || []), ...(report.telemetry?.compactions || []), ...(report.telemetry?.requests || []), ...(report.telemetry?.spans || [])])
+  for (const item of [...(report.telemetry?.notes || []), ...(report.telemetry?.reviews || []), ...(report.telemetry?.compactions || []), ...(report.telemetry?.requests || []), ...(report.telemetry?.spans || []), ...(report.telemetry?.execution?.deliveries || []), ...(report.telemetry?.execution?.acceptances || [])])
     for (const key of item.evidence || []) historyKeys.add(key);
   const allEvents = report._sourceScan?.events || report.events || [];
   const allByKey = new Map(allEvents.map(e => [e.key, e]));

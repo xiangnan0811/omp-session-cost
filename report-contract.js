@@ -87,6 +87,8 @@ export function qualityOf(report) {
   add("auxiliary-usage-unknown", r?.auxiliaryCoverage?.usageUnknown || 0, "压缩自身用量未记录；不等于零费用，也不据此断言供应商另行计费。普通回复计量完整不覆盖辅助请求。");
   add("unlinked-provider-observations", r?.requestObservations?.filter(o => o.status !== "usage-linked").length || 0, "请求钩子可能包含共享主控采集器的侧通道；未关联的观察不是已经核实的额外计费调用。");
   add("wrapped-tool-interior-unobserved", r?.spans?.filter(s => s.category === "wrapped-tool-unobserved").length || 0, "已观测 eval 外层时长，但无法完整分解内部等待；native-wait 为零不能证明没有等待。");
+  add("instances-without-usage", l?.instances?.filter(i => i.usageStatus === "not-recorded").length || 0, "实例有已记录证据但没有用量；保留原名，不显示为免费，也不补造调用。");
+  add("task-result-text-truncated", r?.execution?.coverage?.truncatedOutput || 0, "任务最终结果文本存在字段截取或上游截取；不等于整个导出文件被截断。");
   add("collector-frame-errors", (r?.coverage?.invalidFrames || 0) + (r?.coverage?.unavailable || 0), "部分运行时证据无法读取或解析。");
   const health = r?.coverage?.collectors?.flatMap(c => c.health || []) || [];
   const unhealthyRuns = new Set(health.filter(h => h.dropped > 0 || h.errors?.length).map(h => h.runId));
@@ -108,6 +110,7 @@ export function qualityOf(report) {
     fitness: { ordinaryUsageMissing: m.unmeteredResponses || 0, priceRecordsMissing: m.missingPriceRecords || 0,
       taskAttribution: { selected: report.total?.calls || 0, linked: l?.coverage?.taskKnown || 0 },
       requestTiming: { selected: report.total?.calls || 0, measured: r?.coverage?.measuredRequests || 0 },
+      executionEvidence: r?.execution?.coverage || { status: "not-evaluated" },
       auxiliaryUsage: r?.auxiliaryCoverage || { status: "not-evaluated" },
       effectivePromptLinked: (report.calls || []).filter(c => c.promptHash).length,
       independentPriceComparison: m.databaseCost?.coveredRecords ? "recorded-sources-available" : "not-available" },

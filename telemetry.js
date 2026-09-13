@@ -1,4 +1,5 @@
 import path from "node:path";
+import { buildExecutionEvidence } from "./outcomes.js";
 import { collectionCoverage } from "./report-contract.js";
 import { distribution } from "./diagnostics.js";
 import { responseIdentity, RUNTIME_SCHEMA } from "./runtime.js";
@@ -43,6 +44,12 @@ function unique(items, keyOf) {
   return out;
 }
 const timeSort = (a, b) => (a.timestamp || 0) - (b.timestamp || 0);
+function spanSummary(rows) {
+  const measured = rows.filter(s => s.durationMs !== null);
+  return { measuredSpans: measured.length, incompleteSpans: rows.length - measured.length,
+    unionMs: measured.length ? intervalUnion(measured.map(s => [s.monotonicStart, s.monotonicEnd])) : null,
+    meaning: measured.length === rows.length && rows.length ? "observed-complete-spans" : measured.length ? "known-subtotal; incomplete-spans-excluded" : "not-measured" };
+}
 
 export function attachRuntime(scan) {
   const frames = scan.runtimeEvents || [], calls = scan.calls || [];
@@ -119,13 +126,13 @@ export function buildTelemetry(scan) {
   const spanGroups = new Map();
   for (const s of spans) { const k = `${s.agent}\u0000${s.runId}`; if (!spanGroups.has(k)) spanGroups.set(k, []); spanGroups.get(k).push(s); }
   const waits = [...spanGroups.values()].map(rows => ({ agent: rows[0].agent, runId: rows[0].runId,
-    unionMs: intervalUnion(rows.filter(s => s.durationMs !== null).map(s => [s.monotonicStart, s.monotonicEnd])),
+    ...spanSummary(rows),
     categories: ["native-wait", "approval-wait", "tool-execution", "wrapped-tool-unobserved"].map(category => ({ category, count: rows.filter(s => s.category === category).length,
-      unionMs: intervalUnion(rows.filter(s => s.category === category && s.durationMs !== null).map(s => [s.monotonicStart, s.monotonicEnd])) })) }));
+      ...spanSummary(rows.filter(s => s.category === category)) })) }));
 
   const workflow = [
-    ...related.flatMap(e => [...(e.workflow ? [e.workflow] : []), ...(e.observations || [])].map(o => ({ ...o, agent: e.agent, timestamp: e.timestamp, evidence: e.key, selected: selectedEvents.has(e.key) }))),
-    ...all.filter(f => f.kind === "workflow" && f.observation).map(f => ({ ...f.observation, agent: f.agent, timestamp: f.timestamp, evidence: f.id, selected: selectedFrames.has(f.id) })),
+    ...related.flatMap(e => [...(e.workflow ? [e.workflow] : []), ...(e.observations || [])].map(o => ({ ...o, agent: e.agent, transcriptId: e.transcriptId, sourceFile: e.sessionFile, toolCallId: e.toolCallId || null, timestamp: e.timestamp, evidence: e.key, selected: selectedEvents.has(e.key) }))),
+    ...all.flatMap(f => [...(f.kind === "workflow" && f.observation ? [f.observation] : []), ...(f.kind === "tool-dispatch-result" ? f.observations || [] : [])].map(o => ({ ...o, agent: f.agent, sourceFile: f.sourceFile, toolCallId: f.toolCallId || null, timestamp: f.timestamp, evidence: f.id, selected: selectedFrames.has(f.id) }))),
   ].sort(timeSort);
   const delivered = related.flatMap(e => (e.notes || []).map(n => ({ ...n, owner: e.agent, deliveredAt: e.timestamp, eventKey: e.key })));
   const generations = related.flatMap(e => (e.tools || []).flatMap(t => (t.generatedNotes || []).map(n => ({ ...n, owner: e.ownerAgent || e.agent,
@@ -228,7 +235,8 @@ export function buildTelemetry(scan) {
   });
   const explicitCorrections = notes.filter(n => n.supersedes).map(n => ({ noteId: n.id, supersedes: n.supersedes,
     targetRecorded: notes.some(old => old.owner === n.owner && old.id === n.supersedes), evidence: n.evidence, source: "explicit-supersedes-metadata" }));
-  const referenced = new Set([...requests, ...spans, ...notes, ...reviews, ...compactions].flatMap(x => x.evidence || []));
+  const execution = buildExecutionEvidence(scan, workflow);
+  const referenced = new Set([...requests, ...spans, ...notes, ...reviews, ...compactions, ...execution.deliveries, ...execution.acceptances].flatMap(x => x.evidence || []));
   const evidence = all.filter(f => selectedFrames.has(f.id) || referenced.has(f.id) || (["observer-start", "observer-status"].includes(f.kind) && calls.some(c => c.sessionFile === f.sourceFile))).map(f => ({ ...f, outsideSelectedRange: !selectedFrames.has(f.id) }));
   return { coverage: { ...scan.runtimeCoverage, collectors: collectionCoverage(calls, all, requests), selectedFrames: frames.length, selectedCalls: calls.length, measuredRequests: requests.filter(r => r.durationMs !== null).length,
       unmatchedEnds: frames.filter(f => f.kind === "request-end" && !f.callKey).length, source: all.length ? "passive-runtime-plus-transcript" : "transcript-only; runtime not collected historically" },
@@ -239,7 +247,7 @@ export function buildTelemetry(scan) {
       dispositionUnknown: notes.filter(n => !n.decisionAt).length, open: notes.filter(n => ["open", "pending", "in-progress", "accepted"].includes(n.disposition)).length, blockers: notes.filter(n => n.severity === "blocker").length, blockerAwaitingDisposition: notes.filter(n => n.severity === "blocker" && !n.decisionAt).length,
       blockerOpen: notes.filter(n => n.severity === "blocker" && ["open", "pending", "in-progress", "accepted"].includes(n.disposition)).length,
       deliveryToRequest: distribution(notes.map(n => n.deliveryToRequestMs)), deliveryToDecision: distribution(notes.map(n => n.deliveryToDecisionMs)) },
-    reviews, compactions, auxiliaryCoverage: { observedCompactions: compactions.length, withUsage: compactions.filter(c => c.ownUsage !== null).length, usageUnknown: compactions.filter(c => c.ownUsage === null).length, meaning: "Unknown helper usage is not zero; ordinary response coverage does not establish auxiliary billing completeness." }, helperUsage: measuredGroups(calls.filter(c => c.purpose), c => `${c.agent} / ${c.purpose} / ${c.provider}/${c.model}`),
+    execution, reviews, compactions, auxiliaryCoverage: { observedCompactions: compactions.length, withUsage: compactions.filter(c => c.ownUsage !== null).length, usageUnknown: compactions.filter(c => c.ownUsage === null).length, meaning: "Unknown helper usage is not zero; ordinary response coverage does not establish auxiliary billing completeness." }, helperUsage: measuredGroups(calls.filter(c => c.purpose), c => `${c.agent} / ${c.purpose} / ${c.provider}/${c.model}`),
     configuration: { definitions: [...configurationDefinitions.values()], events: configEvents,
       explicitLoads: workflow.filter(w => w.selected && w.kind === "config-loaded"),
       requestGroups: measuredGroups(calls, c => c.promptHash || "运行时提示版本未记录") },

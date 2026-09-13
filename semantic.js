@@ -67,7 +67,7 @@ export function resultFacts(details) {
   const visit = (v, depth = 0) => {
     if (!v || typeof v !== "object" || depth > 5) return;
     if (Array.isArray(v)) { for (const x of v) visit(x, depth + 1); return; }
-    const explicit = workflowFact(v.costObservation ?? v.observation);
+    const explicit = workflowFact(v.costObservation ?? v.observation ?? v);
     if (explicit) out.push(explicit);
     if (Array.isArray(v.findings)) for (const f of v.findings) {
       if (!f || !string(f.findingId ?? f.id)) continue;
@@ -91,7 +91,7 @@ export function observeSemanticEntry(entry, event) {
   }
   if (entry.type === "session_init") {
     event.kind = "session-init";
-    event.init = { role: string(entry.agent) ? displayName(entry.agent) : null, title: assignmentTitle(entry.task),
+    event.init = { role: string(entry.agent) ? displayName(entry.agent) : null, title: string(entry.task) && assignmentText(entry.task) ? assignmentTitle(entry.task) : null,
       taskHash: string(entry.task) ? assignmentHash(entry.task) : null, rawTaskHash: string(entry.task) ? hash(entry.task) : null, modelRole: string(entry.modelRole) ? displayName(entry.modelRole) : null,
       resolvedModel: string(entry.resolvedModel) ? displayName(entry.resolvedModel) : null,
       systemPromptHash: string(entry.systemPrompt) ? hash(entry.systemPrompt) : null, readOnly: typeof entry.readOnly === "boolean" ? entry.readOnly : null };
@@ -121,16 +121,45 @@ export function observeSemanticEntry(entry, event) {
   }
 }
 
+/** Final task output only, not conversation or reasoning. Every text cap is explicit. */
+function resultExcerpt(value, sourceTruncated = false) {
+  if (typeof value !== "string") return null;
+  const redacted = evidenceText(value), limit = 8192;
+  // Avoid cutting a surrogate pair at the boundary.
+  let end = Math.min(limit, redacted.length);
+  if (end < redacted.length && /[\uD800-\uDBFF]/.test(redacted[end - 1])) end--;
+  return { text: redacted.slice(0, end), originalChars: value.length, retainedChars: end,
+    truncated: end < redacted.length, sourceTruncated: sourceTruncated === true,
+    source: "native task final-result text; credential-redacted untrusted data; UTF-16 character counts" };
+}
+
+function structuredExcerpt(value) {
+  if (value === undefined) return null;
+  try { return resultExcerpt(JSON.stringify(value)); }
+  catch { return { text: null, unavailable: "non-json-structured-result" }; }
+}
+
 /** OMP TaskToolDetails: no nested arbitrary result text is interpreted. */
 export function taskResultFacts(details) {
   if (!details || typeof details !== "object") return [];
-  return [...(Array.isArray(details.results) ? details.results : []), ...(Array.isArray(details.progress) ? details.progress : [])]
+  return [...(Array.isArray(details.results) ? details.results.map(r => ({ ...r, resultKind: "result" })) : []), ...(Array.isArray(details.progress) ? details.progress.map(r => ({ ...r, resultKind: "progress" })) : [])]
     .filter(r => r && string(r.id) && (string(r.agent) || string(r.task) || string(r.assignment)))
     .map(r => ({ id: displayName(r.id), index: Number.isInteger(r.index) && r.index >= 0 ? r.index : null,
       role: string(r.agent) ? displayName(r.agent) : null,
       title: string(r.assignment ?? r.task) ? assignmentTitle(r.assignment ?? r.task) : null,
       taskHash: string(r.assignment ?? r.task) ? assignmentHash(r.assignment ?? r.task) : null,
-      source: "task-result-allocated-id" }));
+      source: "task-result-allocated-id", resultKind: r.resultKind,
+      status: string(r.status) ? displayName(r.status) : null,
+      exitCode: Number.isSafeInteger(r.exitCode) ? r.exitCode : null,
+      durationMs: Number.isFinite(r.durationMs) && r.durationMs >= 0 ? r.durationMs : null,
+      output: r.resultKind === "result" ? resultExcerpt(r.output, r.truncated) : null,
+      stderr: r.resultKind === "result" ? resultExcerpt(r.stderr, r.truncated) : null,
+      structuredOutput: r.resultKind === "result" && r.structuredOutput && typeof r.structuredOutput === "object" ? {
+        status: string(r.structuredOutput.status) ? displayName(r.structuredOutput.status) : null,
+        mode: string(r.structuredOutput.mode) ? displayName(r.structuredOutput.mode) : null,
+        source: string(r.structuredOutput.source) ? displayName(r.structuredOutput.source) : null,
+        error: resultExcerpt(r.structuredOutput.error), data: structuredExcerpt(r.structuredOutput.data),
+      } : null }));
 }
 
 /** OMP EvalToolDetails.statusEvents: no evaluation or parsing of arbitrary stdout. */

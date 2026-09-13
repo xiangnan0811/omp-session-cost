@@ -176,7 +176,7 @@ export function createDiagnosticIndexer() {
     const explicitParent = has(entry, "parentId");
     const parentState = (parentKey && !conflictedKeys.has(parentKey) ? states.get(parentKey) : !explicitParent ? lastByFile.get(file) : null) || {};
     const state = { ...parentState };
-    const event = { key, fileKey, transcriptId: fileId, entryId, parentKey, parentId: entry.parentId ?? null,
+    const event = { key, fileKey, sessionFile: file, transcriptId: fileId, entryId, parentKey, parentId: entry.parentId ?? null,
       timestamp, order: order++, line: position.line ?? null, sourceDigest: position.lineDigest || null,
       agent: identity.agent, agentType: identity.agentType, ownerAgent: identity.ownerAgent, advisorKey: identity.advisorKey,
       kind: "metadata", type: typeof entry.type === "string" ? entry.type : "unknown", identityConflict: Boolean(conflict), privateExcerpt: "" };
