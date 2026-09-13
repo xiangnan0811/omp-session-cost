@@ -288,7 +288,7 @@ export function createDiagnosticIndexer() {
 export function attachCallFacts(call, event) {
   if (!event) return;
   Object.assign(call, { recordKey: event.key, fileKey: event.fileKey, sequence: event.order,
-    transcriptId: event.transcriptId, historicalInit: event.historicalInit, assignment: event.assignment, purpose: event.purpose || null, modelRole: event.modelRole || null, usageFacts: event.usage, stopStatus: event.stopStatus, hasResponseId: event.hasResponseId,
+    transcriptId: event.transcriptId, historicalInit: event.historicalInit, assignment: event.assignment, purpose: event.purpose || null, modelRole: event.modelRole || null, failure: event.failure || null, usageFacts: event.usage, stopStatus: event.stopStatus, hasResponseId: event.hasResponseId,
     hasRequestId: event.hasRequestId, responseRef: event.responseRef, requestRef: event.requestRef, identityConflict: event.identityConflict, historicalThinking: event.historicalThinking,
     historicalModel: event.historicalModel, requestEffort: event.requestEffort, phaseKey: event.phaseKey,
     behavior: event.behavior, previousAssistantKey: event.previousAssistantKey, toolFacts: event.tools });

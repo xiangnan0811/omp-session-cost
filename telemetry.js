@@ -15,7 +15,7 @@ export function intervalUnion(intervals) {
   }
   return total + (start === null ? 0 : end - start);
 }
-const kinds = new Set(["observer-start", "observer-status", "configuration-files", "system-prompt-observed", "agent-start", "agent-end", "turn-start", "context-notes", "request-start", "request-end", "request-unclosed", "assistant-message-start", "response-headers", "first-output", "tool-start", "tool-end", "approval-start", "approval-end", "compaction-start", "compaction-end", "auto-retry-start", "auto-retry-end", "subagent-lifecycle", "workflow"]);
+const kinds = new Set(["observer-start", "observer-status", "configuration-files", "system-prompt-observed", "agent-start", "agent-end", "turn-start", "context-notes", "request-start", "request-end", "request-unclosed", "assistant-message-start", "response-headers", "first-output", "tool-start", "tool-end", "tool-dispatch", "tool-dispatch-result", "eval-status", "approval-start", "approval-end", "compaction-start", "compaction-end", "auto-retry-start", "auto-retry-end", "subagent-lifecycle", "workflow"]);
 export async function readRuntime(descriptors, transcripts) {
   const identity = new Map(transcripts.map(t => [path.resolve(t.file), t.identity]));
   const events = [], files = []; let invalid = 0;
@@ -65,13 +65,16 @@ export function attachRuntime(scan) {
     const k = key(f, "scope"); if (!scopes.has(k)) scopes.set(k, []); scopes.get(k).push(f);
   }
   const enriched = calls.map(c => {
-    const candidates = (matched.get(c.recordKey) || []).filter(f => f.requestId && starts.get(key(f, f.requestId)) && !f.ambiguous);
+    let candidates = (matched.get(c.recordKey) || []).filter(f => f.requestId && starts.get(key(f, f.requestId)) && !f.ambiguous);
+    const direct = candidates.filter(f => f.observerSource === "local-extension");
+    if (direct.length) candidates = direct;
     if (candidates.length !== 1) return c;
     const end = candidates[0], start = starts.get(key(end, end.requestId));
     if (start.ambiguous) return c;
     const scope = (scopes.get(key(start, "scope")) || []).findLast(f => f.monotonicMs <= start.monotonicMs);
     return { ...c, runtimeEndId: end.id, runtimeRequestId: start.requestId, runtimeStartId: start.id,
       requestEffort: c.requestEffort || start.effort || null, promptHash: start.promptHash || null,
+      promptHashSource: start.promptHashSource || "legacy-observation-source-unspecified", toolSchemaHash: start.toolSchemaHash || null,
       assignment: scope?.observation || c.assignment, requestDurationMs: elapsed(start, end) };
   });
   return { ...scan, calls: enriched };
@@ -90,17 +93,21 @@ export function buildTelemetry(scan) {
     const end = byId.get(c.runtimeEndId), start = byId.get(c.runtimeStartId);
     return { id: c.runtimeRequestId, callKey: c.recordKey, agent: c.agent, taskName: c.taskName, model: `${c.provider}/${c.model}`,
       startAt: start?.timestamp, endAt: end?.timestamp, durationMs: elapsed(start, end), firstOutputMs: elapsed(start, outputs.get(key(start, start.requestId))),
-      responseHeadersMs: elapsed(start, headers.get(key(start, start.requestId))), evidence: [start.id, end.id], startOutsideRange: !selectedFrames.has(start.id),
+      responseHeadersMs: elapsed(start, headers.get(key(start, start.requestId))), evidence: [start.id, end.id, outputs.get(key(start, start.requestId))?.id, headers.get(key(start, start.requestId))?.id].filter(Boolean), startOutsideRange: !selectedFrames.has(start.id),
       source: "exact response ID or unique usage/timestamp signature, one observed request" };
   });
   const toolKeys = new Set(calls.flatMap(c => (c.toolFacts || []).map(t => `${c.sessionFile}\u0000${t.id}`)));
-  const spanStarts = all.filter(f => ["tool-start", "approval-start"].includes(f.kind) && (toolKeys.has(`${f.sourceFile}\u0000${f.toolCallId}`) || selectedFrames.has(f.id)));
-  const spanEnds = unique(all.filter(f => ["tool-end", "approval-end"].includes(f.kind)), f => `${key(f, f.toolCallId)}\u0000${f.kind}`);
+  const executionIds = new Set(all.filter(f => f.kind === "tool-start").map(f => key(f, f.toolCallId)));
+  const executionEnds = new Set(all.filter(f => f.kind === "tool-end").map(f => key(f, f.toolCallId)));
+  const spanFrames = all.filter(f => !(f.kind === "tool-dispatch" && executionIds.has(key(f, f.toolCallId))) && !(f.kind === "tool-dispatch-result" && executionEnds.has(key(f, f.toolCallId))))
+    .map(f => f.kind === "tool-dispatch" ? { ...f, kind: "tool-start" } : f.kind === "tool-dispatch-result" ? { ...f, kind: "tool-end" } : f);
+  const spanStarts = spanFrames.filter(f => ["tool-start", "approval-start"].includes(f.kind) && (toolKeys.has(`${f.sourceFile}\u0000${f.toolCallId}`) || selectedFrames.has(f.id)));
+  const spanEnds = unique(spanFrames.filter(f => ["tool-end", "approval-end"].includes(f.kind)), f => `${key(f, f.toolCallId)}\u0000${f.kind}`);
   const uniqueStarts = unique(spanStarts, f => `${key(f, f.toolCallId)}\u0000${f.kind}`);
   let spans = [...uniqueStarts.values()].filter(Boolean).map(start => {
     const end = spanEnds.get(`${key(start, start.toolCallId)}\u0000${start.kind === "tool-start" ? "tool-end" : "approval-end"}`);
     return { id: start.id, agent: start.agent, sourceFile: start.sourceFile, runId: start.runId, toolCallId: start.toolCallId, name: start.name,
-      category: start.kind === "approval-start" ? "approval-wait" : ["hub", "irc", "job"].includes(start.name) && start.operation === "wait" ? "native-wait" : "tool-execution",
+      category: start.kind === "approval-start" ? "approval-wait" : ["hub", "irc", "job"].includes(start.name) && start.operation === "wait" ? "native-wait" : start.name === "eval" ? "wrapped-tool-unobserved" : "tool-execution",
       operation: start.operation || null, startAt: start.timestamp, endAt: end?.timestamp || null, durationMs: elapsed(start, end),
       monotonicStart: start.monotonicMs, monotonicEnd: end?.monotonicMs ?? null, observerSource: start.observerSource,
       evidence: [start.id, end?.id].filter(Boolean), missingReason: !end ? "end-event-not-recorded" : elapsed(start, end) === null ? "invalid-clock-span" : null,
@@ -113,7 +120,7 @@ export function buildTelemetry(scan) {
   for (const s of spans) { const k = `${s.agent}\u0000${s.runId}`; if (!spanGroups.has(k)) spanGroups.set(k, []); spanGroups.get(k).push(s); }
   const waits = [...spanGroups.values()].map(rows => ({ agent: rows[0].agent, runId: rows[0].runId,
     unionMs: intervalUnion(rows.filter(s => s.durationMs !== null).map(s => [s.monotonicStart, s.monotonicEnd])),
-    categories: ["native-wait", "approval-wait", "tool-execution"].map(category => ({ category, count: rows.filter(s => s.category === category).length,
+    categories: ["native-wait", "approval-wait", "tool-execution", "wrapped-tool-unobserved"].map(category => ({ category, count: rows.filter(s => s.category === category).length,
       unionMs: intervalUnion(rows.filter(s => s.category === category && s.durationMs !== null).map(s => [s.monotonicStart, s.monotonicEnd])) })) }));
 
   const workflow = [
@@ -195,21 +202,45 @@ export function buildTelemetry(scan) {
     const own = start && end ? actorCalls.filter(c => /^(?:compact|compaction)(?:$|[:/_-])/.test(c.purpose || "") && c.timestamp >= start.timestamp && c.timestamp <= end.timestamp) : [];
     return { eventKey: e.key, agent: e.agent, method: e.method || e.compactionMode || null, taskName: e.taskName, phase: e.workPhase,
       before: measure(before), after: measure(after), sameModel: before.length && after.length ? `${before.at(-1).provider}/${before.at(-1).model}` === `${after[0].provider}/${after[0].model}` : null,
-      ownUsage: own.length ? measure(own) : null, durationMs: elapsed(start, end), evidence: [e.key, start?.id, end?.id, ...own.map(c => c.recordKey)].filter(Boolean),
+      ownUsage: own.length ? measure(own) : null, ownUsageStatus: own.length ? "explicit-helper-records-in-observed-interval" : "not-recorded; not zero and not proof of missing billing", durationMs: elapsed(start, end), evidence: [e.key, start?.id, end?.id, ...own.map(c => c.recordKey)].filter(Boolean),
       window: "up to five non-helper calls each side, bounded by selection and adjacent compactions", netSavings: null, qualityImpact: "not-measured" };
   });
+  const linkedRequests = new Set(calls.filter(c => c.runtimeRequestId).map(c => c.runtimeRequestId));
+  const requestObservations = frames.filter(f => f.kind === "request-start").map(f => ({
+    id: f.id, requestId: f.requestId, collectorAgent: f.agent, provider: f.provider || null, model: f.model || f.payloadModel || null,
+    status: linkedRequests.has(f.requestId) ? "usage-linked" : "unlinked-request-observation", ambiguous: Boolean(f.ambiguous),
+    responseHeadersObserved: Boolean(headers.get(key(f, f.requestId))), timestamp: f.timestamp, evidence: [f.id],
+    owner: linkedRequests.has(f.requestId) ? f.agent : null,
+    caveat: "Collector session is not proof of request owner; auxiliary requests can share the primary hooks. Response headers are not completion." }));
+  const configurationDefinitions = new Map();
+  const configEvents = frames.filter(f => ["configuration-files", "system-prompt-observed"].includes(f.kind)).map(f => {
+    if (f.kind !== "configuration-files" || !f.fingerprint || !Array.isArray(f.files)) return f;
+    const k = f.fingerprint;
+    if (!configurationDefinitions.has(k)) configurationDefinitions.set(k, { fingerprint: k, files: f.files, source: "disk-observation-not-effective-loading" });
+    const { files, ...observation } = f;
+    return { ...observation, definitionRef: k };
+  });
+  const cards = [...new Map(notes.map(n => [n.eventKey, { eventKey: n.eventKey, owner: n.owner, deliveredAt: n.deliveredAt }])).values()].map(card => {
+    const items = notes.filter(n => n.eventKey === card.eventKey);
+    return { ...card, noteIds: items.map(n => n.id), noteCount: items.length,
+      oldestNoteAgeMs: items.some(n => n.generationToDeliveryMs !== null) ? Math.max(...items.map(n => n.generationToDeliveryMs ?? 0)) : null,
+      deliveryToRequestMs: items.find(n => n.deliveryToRequestMs !== null)?.deliveryToRequestMs ?? null };
+  });
+  const explicitCorrections = notes.filter(n => n.supersedes).map(n => ({ noteId: n.id, supersedes: n.supersedes,
+    targetRecorded: notes.some(old => old.owner === n.owner && old.id === n.supersedes), evidence: n.evidence, source: "explicit-supersedes-metadata" }));
   const referenced = new Set([...requests, ...spans, ...notes, ...reviews, ...compactions].flatMap(x => x.evidence || []));
   const evidence = all.filter(f => selectedFrames.has(f.id) || referenced.has(f.id) || (["observer-start", "observer-status"].includes(f.kind) && calls.some(c => c.sessionFile === f.sourceFile))).map(f => ({ ...f, outsideSelectedRange: !selectedFrames.has(f.id) }));
   return { coverage: { ...scan.runtimeCoverage, collectors: collectionCoverage(calls, all, requests), selectedFrames: frames.length, selectedCalls: calls.length, measuredRequests: requests.filter(r => r.durationMs !== null).length,
       unmatchedEnds: frames.filter(f => f.kind === "request-end" && !f.callKey).length, source: all.length ? "passive-runtime-plus-transcript" : "transcript-only; runtime not collected historically" },
-    requests, requestDuration: distribution(requests.map(r => r.durationMs)), firstOutput: distribution(requests.map(r => r.firstOutputMs)),
+    retryEvents: frames.filter(f => ["auto-retry-start", "auto-retry-end"].includes(f.kind)),
+    requestObservations, requests, requestDuration: distribution(requests.map(r => r.durationMs)), firstOutput: distribution(requests.map(r => r.firstOutputMs)),
     responseHeaders: distribution(requests.map(r => r.responseHeadersMs)), spans, waits, notes,
-    advisor: { generationLinked: notes.filter(n => n.generatedAt !== null).length, generationToDelivery: distribution(notes.map(n => n.generationToDeliveryMs)), delivered: notes.length, contextObserved: notes.filter(n => n.contextAt !== null).length, requestObserved: notes.filter(n => n.requestObservedAt).length, disposed: notes.filter(n => n.decisionAt).length,
+    advisor: { cards, deliveredCards: cards.length, explicitCorrections, cardDeliveryToRequest: distribution(cards.map(c => c.deliveryToRequestMs)), generationLinked: notes.filter(n => n.generatedAt !== null).length, generationToDelivery: distribution(notes.map(n => n.generationToDeliveryMs)), delivered: notes.length, contextObserved: notes.filter(n => n.contextAt !== null).length, requestObserved: notes.filter(n => n.requestObservedAt).length, disposed: notes.filter(n => n.decisionAt).length,
       dispositionUnknown: notes.filter(n => !n.decisionAt).length, open: notes.filter(n => ["open", "pending", "in-progress", "accepted"].includes(n.disposition)).length, blockers: notes.filter(n => n.severity === "blocker").length, blockerAwaitingDisposition: notes.filter(n => n.severity === "blocker" && !n.decisionAt).length,
       blockerOpen: notes.filter(n => n.severity === "blocker" && ["open", "pending", "in-progress", "accepted"].includes(n.disposition)).length,
       deliveryToRequest: distribution(notes.map(n => n.deliveryToRequestMs)), deliveryToDecision: distribution(notes.map(n => n.deliveryToDecisionMs)) },
-    reviews, compactions, helperUsage: measuredGroups(calls.filter(c => c.purpose), c => `${c.agent} / ${c.purpose} / ${c.provider}/${c.model}`),
-    configuration: { events: frames.filter(f => ["configuration-files", "system-prompt-observed"].includes(f.kind)),
+    reviews, compactions, auxiliaryCoverage: { observedCompactions: compactions.length, withUsage: compactions.filter(c => c.ownUsage !== null).length, usageUnknown: compactions.filter(c => c.ownUsage === null).length, meaning: "Unknown helper usage is not zero; ordinary response coverage does not establish auxiliary billing completeness." }, helperUsage: measuredGroups(calls.filter(c => c.purpose), c => `${c.agent} / ${c.purpose} / ${c.provider}/${c.model}`),
+    configuration: { definitions: [...configurationDefinitions.values()], events: configEvents,
       explicitLoads: workflow.filter(w => w.selected && w.kind === "config-loaded"),
       requestGroups: measuredGroups(calls, c => c.promptHash || "运行时提示版本未记录") },
     evidence,

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { runtimeDelegationTools, poolDelegations } from "./lineage.js";
 import { summarizeCalls, distribution } from "./diagnostics.js";
 import { displayName } from "./semantic.js";
 import { transcriptStem } from "./transcript.js";
@@ -39,6 +40,7 @@ export function attributeScan(scan) {
       title: null, initEventKey: null, parentToolCallId: null, parentAgent: null, assignmentEvidence: [] });
     if (e.kind === "session-init") Object.assign(instances.get(e.transcriptId), e.init, { initEventKey: e.key, roleSource: e.init.role ? "session_init.agent" : "not-recorded" });
   }
+  for (const instance of instances.values()) instance.initialTitle = instance.title;
   const byFile = new Map();
   for (const c of calls) if (instances.has(c.transcriptId)) {
     const instance = instances.get(c.transcriptId);
@@ -62,7 +64,11 @@ export function attributeScan(scan) {
     if (!instance || instance.actorType !== "subagent") continue;
     if (f.role) { instance.role = f.role; instance.roleSource = "task:subagent:lifecycle.agent"; }
     if (f.name) instance.runtimeName = f.name;
-    if (f.title) instance.title = f.title;
+    if (f.title) {
+      instance.instructionHistory ??= [];
+      if (instance.instructionHistory.at(-1)?.title !== f.title) instance.instructionHistory.push({ title: f.title, timestamp: f.timestamp, evidence: f.id, source: "lifecycle-description" });
+      instance.latestInstruction = f.title;
+    }
     if (f.parentToolCallId) { instance.parentToolCallId = f.parentToolCallId; instance.parentAgent = f.agent; instance.assignmentEvidence.push(f.id); }
     if (["started", "completed", "failed", "aborted"].includes(f.status)) instance.status = f.status;
   }
@@ -74,7 +80,8 @@ export function attributeScan(scan) {
   }
   const tasksByEventId = group([...tasks.values()], t => t.eventId);
   const tools = events.flatMap(e => (e.tools || []).map(t => ({ ...t, eventKey: e.key, parentAgent: e.agent, transcriptId: e.transcriptId, phaseKey: e.phaseKey })));
-  const delegations = tools.flatMap(t => (t.delegations || []).map(d => ({ ...d, eventKey: t.eventKey, parentAgent: t.parentAgent, transcriptId: t.transcriptId, phaseKey: t.phaseKey })));
+  tools.push(...runtimeDelegationTools(frames, byFile, eventsByKey));
+  const delegations = tools.flatMap(t => (t.delegations || []).map(d => ({ ...d, eventKey: t.eventKey, parentAgent: t.parentAgent, transcriptId: t.transcriptId, phaseKey: t.phaseKey, evidence: t.evidence || [] })));
   const parents = new Map();
   for (const instance of instances.values()) {
     if (instance.actorType !== "subagent") continue;
@@ -92,6 +99,7 @@ export function attributeScan(scan) {
         transcriptId: tool.transcriptId, phaseKey: tool.phaseKey, match: "task-result-allocated-id" }));
     });
     let candidates = fromResults;
+    if (!candidates.length) candidates = poolDelegations(instance, events, tools, instance.parentInstanceId);
     if (!candidates.length && instance.parentToolCallId) {
       candidates = parentDelegations.filter(d => d.toolCallId === instance.parentToolCallId &&
         (!d.name || [leaf, instance.runtimeName].includes(d.name) || (instance.taskHash && d.taskHash === instance.taskHash)));
@@ -142,12 +150,19 @@ export function attributeScan(scan) {
     if (explicit?.length === 1) return { ids: [explicit[0].id], evidence: [e.key || e.recordKey], reason: "explicit-task-id" };
     if (e.agentType === "main") return { ids: tasks.has(e.phaseKey) ? [e.phaseKey] : [], evidence: [e.phaseKey].filter(Boolean), reason: "main-parent-chain" };
     if (e.agentType === "advisor") return { ids: [], evidence: [], reason: "advisor-shared-without-explicit-task-id" };
+    const segment = eventsByKey.get(e.phaseKey), instance = instances.get(e.transcriptId);
+    if (segment?.kind === "user-task" && segment.taskHash && instance?.taskHash && segment.taskHash !== instance.taskHash) {
+      const matching = delegations.filter(d => d.transcriptId === instance.parentInstanceId && d.taskHash === segment.taskHash);
+      const ids = [...new Set(matching.map(d => d.phaseKey).filter(k => tasks.has(k)))];
+      return { ids, evidence: [segment.key, ...matching.flatMap(d => [d.eventKey, ...(d.evidence || [])])],
+        reason: ids.length === 1 ? "assignment-segment-exact-hash" : ids.length > 1 ? "ambiguous-assignment-segment" : "assignment-segment-unlinked" };
+    }
     return ownership(e.transcriptId);
   }
   function fields(e) {
     const instance = instances.get(e.transcriptId), owner = ownerFor(e), taskKey = owner.ids.length === 1 ? owner.ids[0] : SHARED_TASK;
     return { instanceId: e.transcriptId, instanceName: instance?.runtimeName || e.agent, role: (e.purpose ? e.modelRole : null) || instance?.role || null,
-      roleSource: e.purpose && e.modelRole ? "model_usage.role" : instance?.roleSource || "not-recorded", title: instance?.title || null,
+      roleSource: e.purpose && e.modelRole ? "model_usage.role" : instance?.roleSource || "not-recorded", title: eventsByKey.get(e.phaseKey)?.taskTitle || instance?.initialTitle || instance?.title || null,
       taskKey, taskName: tasks.get(taskKey)?.name || "共享／未归属", taskAttribution: owner.reason,
       assignmentEvidence: owner.evidence, candidateTasks: owner.ids, workPhase: e.assignment?.phase || null, roundId: e.assignment?.roundId || null };
   }

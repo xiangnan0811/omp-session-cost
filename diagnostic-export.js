@@ -1,3 +1,4 @@
+import { finalizeEvidence, sampleCalls, closeParentRefs } from "./evidence-package.js";
 import { digest, cleanText, numberOrNull, summarizeCalls } from "./diagnostics.js";
 import { displayName } from "./semantic.js";
 import { distribution } from "./diagnostics.js";
@@ -44,12 +45,12 @@ export function buildDiagnosticData(report, options = {}) {
     instanceId: c.instanceId || c.transcriptId || null, instanceName: c.instanceName || c.agent, role: c.role || null,
     roleSource: c.roleSource || "source-not-recorded", title: c.title || null, taskKey: c.taskKey || null, taskName: c.taskName || null,
     taskAttribution: c.taskAttribution || "source-not-recorded", assignmentEvidence: c.assignmentEvidence || [], workPhase: c.workPhase || null,
-    roundId: c.roundId || null, purpose: c.purpose || null, promptHash: c.promptHash || null, runtimeRequestId: c.runtimeRequestId || null,
+    roundId: c.roundId || null, purpose: c.purpose || null, promptHashSource: c.promptHashSource || null, toolSchemaHash: c.toolSchemaHash || null, promptHash: c.promptHash || null, runtimeRequestId: c.runtimeRequestId || null,
     requestDurationMs: c.requestDurationMs ?? null, parentRef: ref(eventMap.get(c.recordKey)?.parentKey),
     fileRef: c.fileKey || null, localLine: c.sequence === undefined ? null : eventMap.get(c.recordKey)?.line || null,
     timestamp: iso(c.timestamp), actorType: c.agentType, agent: agentName(c.agent), model: modelName(c.provider, c.model), api: safeId(c.api),
     responseIdRecorded: c.hasResponseId || false, requestIdRecorded: c.hasRequestId || false, responseRef: c.responseRef || null, requestRef: c.requestRef || null, identityConflict: Boolean(c.identityConflict),
-    status: c.stopStatus || "unknown", usage: c.usageFacts ? { ...c.usageFacts } : null,
+    status: c.stopStatus || "unknown", failure: c.failure || null, usage: c.usageFacts ? { ...c.usageFacts } : null,
     measuredTokens: c.measuredTokens, orchestration: { input: c.orchestrationInput, output: c.orchestrationOutput, cacheRead: c.orchestrationCacheRead },
     historicalThinking: thinking(c.historicalThinking), requestEffort: c.requestEffort || null,
     historicalModel: c.historicalModel ? { ...thinking(c.historicalModel), value: safeId(c.historicalModel.value) } : null,
@@ -66,11 +67,19 @@ export function buildDiagnosticData(report, options = {}) {
   const historyKeys = new Set(sourceCalls.flatMap(c => [c.historicalThinking?.eventKey, c.historicalModel?.eventKey, c.phaseKey, c.taskKey, c.historicalInit?.eventKey, ...(c.assignmentEvidence || [])]).filter(Boolean));
   for (const item of [...(report.telemetry?.notes || []), ...(report.telemetry?.reviews || []), ...(report.telemetry?.compactions || []), ...(report.telemetry?.requests || []), ...(report.telemetry?.spans || [])])
     for (const key of item.evidence || []) historyKeys.add(key);
-  const history = (report._sourceScan?.events || []).filter(e => historyKeys.has(e.key) && !selectedEventKeys.has(e.key));
+  const allEvents = report._sourceScan?.events || report.events || [];
+  const allByKey = new Map(allEvents.map(e => [e.key, e]));
+  const pending = [...selectedEventKeys, ...historyKeys];
+  const closed = new Set();
+  for (let i = 0; i < pending.length; i++) {
+    const k = pending[i]; if (closed.has(k)) continue; closed.add(k);
+    const e = allByKey.get(k); if (e?.parentKey) pending.push(e.parentKey);
+  }
+  const history = allEvents.filter(e => closed.has(e.key) && !selectedEventKeys.has(e.key));
   const events = [...history, ...(report.events || [])].map(e => ({
     ref: ref(e.key), key: e.key, eventId: e.entryId, instanceId: e.instanceId || e.transcriptId, role: e.role || null,
     taskName: e.taskName || null, taskTitle: e.taskTitle || null, assignment: e.assignment || null,
-    init: e.init || null, taskResults: e.taskResults || [], workflow: e.workflow || null, observations: e.observations || [],
+    init: e.init || null, taskHash: e.taskHash || null, toolCallId: e.toolCallId || null, evalStatuses: e.evalStatuses || [], taskResults: e.taskResults || [], workflow: e.workflow || null, observations: e.observations || [],
     delegations: (e.tools || []).flatMap(t => t.delegations || []), label: e.label || null, title: e.title || null, parentRef: ref(e.parentKey), fileRef: e.fileKey, localLine: e.line, timestamp: iso(e.timestamp),
     actorType: e.agentType, agent: agentName(e.agent), kind: e.kind,
     outsideSelectedRange: !selectedEventKeys.has(e.key),
@@ -98,7 +107,7 @@ export function buildDiagnosticData(report, options = {}) {
     background.set(c.agentType, item);
   }
   const modelAgent = (report.models || []).map(model => ({ model: modelName(model.provider, model.model), agents: (model.agents || []).map(a => ({ agent: agentName(a.name), actorType: a.agentType, ...totals(a) })) }));
-  return {
+  return finalizeEvidence({
     schemaVersion: DIAGNOSTIC_SCHEMA, generatedBy: `omp-session-cost ${report.version}`, generatedAt: iso(report.generatedAt), ruleVersion: RULE_VERSION,
     sessionId: displayName(report.sessionId), sessionTitle: report.sessionTitle || null, rootSessionFile: report.rootSessionFile || null,
     dataQuality: qualityOf(report),
@@ -147,7 +156,7 @@ export function buildDiagnosticData(report, options = {}) {
       "No automatic engineering-value, adoption, adjudication or quality score is inferred.",
       "Reasoning, compaction and side-channel usage not recorded by OMP cannot be reconstructed.",
       "Default exports include credential-redacted Advisor advice and task titles, not complete conversations; optional excerpts remain limited context, not a complete semantic audit."]
-  };
+  });
 }
 
 function amountTable(total, measurement, calls) {
@@ -248,6 +257,7 @@ export function diagnosticMarkdown(data, { full = false, language = "zh" } = {})
     lines.push("", "## Complete event index", "", "| Ref | Timestamp | Kind | Agent | Local file / line |", "|---|---|---|---|---|");
     for (const e of data.events) lines.push(`| ${e.ref} | ${e.timestamp || "unknown"} | ${e.kind} | ${e.agent} | ${e.fileRef}:${e.localLine} |`);
   }
+  lines.push("", "## Replay ledger", JSON.stringify(data.replay), "", "## Evidence manifest", JSON.stringify(data.evidenceManifest), "", "## Complete event metadata", ...data.events.map(e => JSON.stringify(e)));
   return sealMarkdown(lines.join("\n").trimEnd() + "\n");
 }
 
