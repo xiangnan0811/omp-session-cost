@@ -3,13 +3,14 @@ import path from "node:path";
 import os from "node:os";
 import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
-import { hash, displayName, titleOf, assignmentTitle, noteFacts, resultFacts, workflowFact } from "./semantic.js";
+import { hash, displayName, titleOf, assignmentTitle, assignmentHash, taskFacts, taskResultFacts, evalStatusFacts, noteFacts, resultFacts, workflowFact } from "./semantic.js";
+import { RequestTracker, requestModel, promptEvidence } from "./request-tracker.js";
 import { VERSION } from "./version.js";
 
 export const RUNTIME_SCHEMA = 1;
 export const sidecarPath = file => `${file}.cost-events.ndjson`;
 export const OBSERVATION_CHANNEL = "omp-session-cost:observation";
-export const HOOKS = ["session_start", "session_switch", "before_agent_start", "agent_start", "agent_end", "turn_start", "context", "before_provider_request", "after_provider_response", "message_start", "message_update", "message_end", "tool_execution_start", "tool_execution_end", "tool_approval_requested", "tool_approval_resolved", "auto_compaction_start", "session_before_compact", "session_compact", "auto_compaction_end", "auto_retry_start", "auto_retry_end", "session_shutdown"];
+export const HOOKS = ["session_start", "session_switch", "before_agent_start", "agent_start", "agent_end", "turn_start", "context", "before_provider_request", "after_provider_response", "message_start", "message_update", "message_end", "tool_execution_start", "tool_execution_update", "tool_execution_end", "tool_call", "tool_result", "tool_approval_requested", "tool_approval_resolved", "auto_compaction_start", "session_before_compact", "session_compact", "auto_compaction_end", "auto_retry_start", "auto_retry_end", "session_shutdown"];
 const number = n => typeof n === "number" && Number.isFinite(n) ? n : null;
 const text = s => typeof s === "string" ? displayName(s, "") : null;
 
@@ -74,7 +75,7 @@ export function createRuntimeObserver(pi, options = {}) {
   function stateFor(file, ctx, sink = file) {
     if (!file) return null;
     let s = states.get(file);
-    if (!s) { s = { file, sink, ctx, request: null, context: null, promptHash: null, configHash: null, compactId: null, observedHooks: {}, started: false }; states.set(file, s); }
+    if (!s) { s = { file, sink, ctx, requests: new RequestTracker(), context: null, promptHash: null, configHash: null, compactId: null, observedHooks: {}, started: false }; states.set(file, s); }
     if (ctx) s.ctx = ctx;
     return s;
   }
@@ -99,7 +100,7 @@ export function createRuntimeObserver(pi, options = {}) {
     }
     await chain;
     for (const s of states.values()) {
-      const health = { observedHooks: { ...s.observedHooks }, firstObservedAt: s.firstObservedAt || null, dropped, errors: errors.slice(), scope: "collector-process cumulative counters; do not sum snapshots" };
+      const health = { observedHooks: { ...s.observedHooks }, firstObservedAt: s.firstObservedAt || null, lastActivityAt: s.lastActivityAt || null, pendingRequests: s.requests.pending.size, retiredUnlinkedRequests: s.requests.retired, omittedRequests: s.requests.omitted, requestTrackerOverflow: s.requests.overflow, dropped, errors: errors.slice(), scope: "collector-process cumulative counters; do not sum snapshots" };
       const fingerprint = hash(health);
       if (s.healthHash !== fingerprint) { record(s, "observer-status", health); s.healthHash = fingerprint; }
     }
@@ -109,20 +110,29 @@ export function createRuntimeObserver(pi, options = {}) {
     const files = await observeConfig(s.ctx?.cwd), fingerprint = hash(files);
     if (fingerprint !== s.configHash) { record(s, "configuration-files", { files, fingerprint }); s.configHash = fingerprint; }
   }
+  const requestScope = s => s.compactId || (s.turnOpen && s.turnId) || `${runId}/outside-primary-turn`;
   async function handle(event, ctx, childState = null) {
     const s = childState || stateFor(ctx?.sessionManager?.getSessionFile?.(), ctx);
     if (!s) return;
     if (!childState) current = s;
     start(s, event.type);
+    s.lastActivityAt = now();
     s.observedHooks[event.type] = (s.observedHooks[event.type] || 0) + 1;
     switch (event.type) {
       case "session_start": case "session_switch": await config(s); break;
       case "before_agent_start":
+        s.primaryModel = requestModel(null, ctx?.model);
         if (event.systemPrompt) { const fingerprint = hash(event.systemPrompt); if (s.promptHash !== fingerprint) record(s, "system-prompt-observed", { fingerprint, source: "before_agent_start input; may be modified by later extensions" }); s.promptHash = fingerprint; }
         await config(s); break;
       case "agent_start": record(s, "agent-start"); break;
       case "agent_end": record(s, "agent-end", { willContinue: event.willContinue ?? null }); break;
-      case "turn_start": s.turnId = `${runId}/turn/${seq + 1}`; record(s, "turn-start", { turnId: s.turnId, turnIndex: number(event.turnIndex) }); break;
+      case "turn_start": {
+        s.turnParentEntryId = text(ctx?.sessionManager?.getLeafId?.()); s.turnId = `${runId}/turn/${seq + 1}`; s.turnOpen = true;
+        if (ctx?.model) s.primaryModel = requestModel(null, ctx.model);
+        const retired = s.requests.retireExceptScope(requestScope(s));
+        record(s, "turn-start", { turnId: s.turnId, turnIndex: number(event.turnIndex), parentEntryId: s.turnParentEntryId,
+          retiredUnlinkedRequests: retired, retirementMeaning: "Previous primary scope ended; auxiliary ownership/completion still unknown, not a zero-duration request." }); break;
+      }
       case "context": {
         const notes = (event.messages || []).flatMap(m => m?.customType === "advisor" ? noteFacts(m.details?.notes) : []);
         const fingerprint = hash(notes);
@@ -130,36 +140,67 @@ export function createRuntimeObserver(pi, options = {}) {
         break;
       }
       case "before_provider_request": {
-        if (s.request && !s.request.closed) record(s, "request-unclosed", { requestId: s.request.id, reason: "new request before prior message end" });
-        const ambiguous = Boolean(s.request && !s.request.closed);
-        s.request = { id: `${runId}/request/${seq + 1}`, closed: false, first: false, ambiguous };
-        record(s, "request-start", { requestId: s.request.id, turnId: s.turnId, ambiguous,
-          contextId: s.context?.id || null, promptHash: s.promptHash, effort: requestEffort(event.payload), notes: wireNotes(event.payload),
-          payloadModel: text(event.payload?.model), source: "before_provider_request input; later extensions can replace payload" }); break;
-      }
-      case "after_provider_response": record(s, "response-headers", { requestId: s.request?.id || null, status: number(event.status), providerRequestId: text(event.requestId) }); break;
-      case "message_start":
-        if (event.message?.role === "assistant") { s.messageStart = record(s, "assistant-message-start"); }
+        const identity = { ...requestModel(event.payload, ctx?.model), scope: requestScope(s) };
+        const { request, overlaps } = s.requests.start(`${runId}/request/${seq + 1}`, identity);
+        // Explicitly retain collisions; never match by nearest time or a global current slot.
+        for (const id of overlaps) record(s, "request-unclosed", { requestId: id, reason: "overlapping-compatible-request", competingRequestId: request.id });
+        const prompt = promptEvidence(event.payload);
+        record(s, "request-start", { requestId: request.id, turnId: s.turnId, ambiguous: request.ambiguous,
+          ...identity, contextId: s.context?.id || null, ...prompt,
+          promptHash: prompt.promptHash || (!s.compactId && s.primaryModel?.model === identity.model && s.primaryModel?.provider === identity.provider ? s.promptHash : null),
+          promptHashSource: prompt.promptHash ? prompt.promptHashSource : !s.compactId && s.primaryModel?.model === identity.model && s.primaryModel?.provider === identity.provider && s.promptHash ? "before-agent-start-observation" : prompt.promptHashSource,
+          effort: requestEffort(event.payload), notes: wireNotes(event.payload),
+          payloadModel: text(event.payload?.model), source: "before_provider_request input; later extensions can replace payload" });
         break;
-      case "message_update":
-        if (s.request && !s.request.first && /^(?:text|thinking|toolcall)_delta$/.test(event.assistantMessageEvent?.type || "")) {
-          s.request.first = true; record(s, "first-output", { requestId: s.request.id, outputKind: event.assistantMessageEvent.type });
+      }
+      case "after_provider_response": {
+        const match = s.requests.select(requestModel(null, ctx?.model), event.localRequestId);
+        if (match.request) match.request.headers = true;
+        record(s, "response-headers", { requestId: match.request?.id || null, association: match.reason,
+          ...requestModel(null, ctx?.model), status: number(event.status), providerRequestId: text(event.requestId) }); break;
+      }
+      case "message_start":
+        if (event.message?.role === "assistant") s.messageStart = record(s, "assistant-message-start", { provider: text(event.message.provider), model: text(event.message.model) });
+        break;
+      case "message_update": {
+        const message = event.message || event.assistantMessageEvent?.partial || {};
+        const match = s.requests.select({ provider: message.provider || null, model: message.model || null, scope: requestScope(s) }, event.localRequestId);
+        if (match.request && !match.request.first && /^(?:text|thinking|toolcall)_delta$/.test(event.assistantMessageEvent?.type || "")) {
+          match.request.first = true; record(s, "first-output", { requestId: match.request.id, outputKind: event.assistantMessageEvent.type });
         }
         break;
+      }
       case "message_end":
         if (event.message?.role === "assistant") {
-          record(s, "request-end", { requestId: s.request?.id || null, messageStartId: s.messageStart?.id || null,
-            ambiguous: s.request?.ambiguous || false, ...responseIdentity(event.message), stopReason: text(event.message.stopReason) });
-          if (s.request) s.request.closed = true;
-          s.messageStart = null;
+          const match = s.requests.select({ provider: event.message.provider || null, model: event.message.model || null, scope: requestScope(s) }, event.localRequestId);
+          record(s, "request-end", { requestId: match.request?.id || null, messageStartId: s.messageStart?.id || null,
+            ambiguous: !match.request, association: match.reason, candidateRequestIds: (match.candidates || []).slice(0, 32), candidateRequestCount: match.candidates?.length || 0,
+            ...responseIdentity(event.message), stopReason: text(event.message.stopReason) });
+          s.requests.finish(match.request); s.messageStart = null; s.turnOpen = false;
         }
         break;
+      case "tool_call": {
+        const args = event.input || event.args || {};
+        record(s, "tool-dispatch", { toolCallId: text(event.toolCallId), name: text(event.toolName),
+          operation: text(args.op ?? args.action), timeoutMs: number(args.timeoutMs),
+          turnId: s.turnId || null, parentEntryId: s.turnParentEntryId || null,
+          delegations: taskFacts(event.toolName, args, text(event.toolCallId)) });
+        break;
+      }
+      case "tool_result":
+        record(s, "tool-dispatch-result", { toolCallId: text(event.toolCallId), name: text(event.toolName),
+          isError: Boolean(event.isError), taskResults: event.toolName === "task" ? taskResultFacts(event.details) : [],
+          observations: resultFacts(event.details) }); break;
       case "tool_execution_start":
         record(s, "tool-start", { toolCallId: text(event.toolCallId), name: text(event.toolName), operation: text(event.args?.op ?? event.args?.action),
-          timeoutMs: number(event.args?.timeoutMs), turnId: s.turnId,
+          timeoutMs: number(event.args?.timeoutMs), turnId: s.turnId, parentEntryId: s.turnParentEntryId || null,
+          delegations: taskFacts(event.toolName, event.args, text(event.toolCallId)),
           generatedNotes: event.toolName === "advise" ? noteFacts([{ ...event.args, advisor: event.args?.advisor || "default" }]) : [] }); break;
+      case "tool_execution_update":
+        for (const status of evalStatusFacts(event.partialResult?.details)) record(s, "eval-status", { toolCallId: text(event.toolCallId), status });
+        break;
       case "tool_execution_end":
-        record(s, "tool-end", { toolCallId: text(event.toolCallId), name: text(event.toolName), isError: Boolean(event.isError) });
+        record(s, "tool-end", { toolCallId: text(event.toolCallId), name: text(event.toolName), isError: Boolean(event.isError), taskResults: event.toolName === "task" ? taskResultFacts(event.result?.details) : [], evalStatuses: event.toolName === "eval" ? evalStatusFacts(event.result?.details) : [] });
         for (const observation of resultFacts(event.result?.details)) record(s, "workflow", { observation, toolCallId: text(event.toolCallId) });
         break;
       case "tool_approval_requested": case "tool_approval_resolved":
@@ -168,7 +209,7 @@ export function createRuntimeObserver(pi, options = {}) {
         if (!s.compactId) { s.compactId = `${runId}/compact/${seq + 1}`; record(s, "compaction-start", { compactionId: s.compactId, reason: text(event.reason), tokensBefore: number(event.preparation?.tokensBefore) }); } break;
       case "session_compact": case "auto_compaction_end":
         record(s, "compaction-end", { compactionId: s.compactId, entryId: text(event.compactionEntry?.id), aborted: event.aborted ?? null, skipped: event.skipped ?? null }); s.compactId = null; break;
-      case "auto_retry_start": case "auto_retry_end": record(s, event.type.replaceAll("_", "-"), { attempt: number(event.attempt), delayMs: number(event.delayMs), success: event.success ?? null }); break;
+      case "auto_retry_start": case "auto_retry_end": record(s, event.type.replaceAll("_", "-"), { turnId: s.turnId || null, scope: requestScope(s), attempt: number(event.attempt), delayMs: number(event.delayMs), success: event.success ?? null }); break;
       case "session_shutdown": await chain; for (const remove of removers.splice(0)) { try { remove(); } catch {} } break;
     }
   }
@@ -204,7 +245,7 @@ export function createRuntimeObserver(pi, options = {}) {
     const child = stateFor(data.sessionFile, null, parent.sink); if (data.progress?.id) registerChild(data.progress.id, child);
     const fingerprint = hash([data.agent, data.task, data.parentToolCallId, data.assignment]);
     if (child.progressHash === fingerprint) return; child.progressHash = fingerprint;
-    record(parent, "subagent-lifecycle", { childFile: data.sessionFile, name: text(data.progress?.id), role: text(data.agent), title: typeof data.task === "string" ? assignmentTitle(data.task) : null, parentToolCallId: text(data.parentToolCallId), status: "progress", assignment: text(data.assignment) });
+    record(parent, "subagent-lifecycle", { childFile: data.sessionFile, name: text(data.progress?.id), role: text(data.agent), title: typeof data.task === "string" ? assignmentTitle(data.task) : null, parentToolCallId: text(data.parentToolCallId), status: "progress", assignment: typeof data.assignment === "string" ? assignmentTitle(data.assignment) : null, taskHash: typeof data.task === "string" ? assignmentHash(data.task) : null });
   });
   listen("task:subagent:event", data => {
     const s = children.get(data?.id); if (!s || !data.event) return;

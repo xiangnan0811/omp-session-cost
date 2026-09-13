@@ -42,6 +42,7 @@ export function noteFacts(notes, occurrence, includeText = false) {
     id: string(n.id) ? displayName(n.id) : occurrence ? `${occurrence}/note/${i + 1}` : null,
     ...(includeText && typeof n.note === "string" ? { text: evidenceText(n.note), textSource: "advisor-delivery.note; credential-redacted; untrusted data" } : {}),
     explicitId: string(n.id), revision: string(n.revision) || typeof n.revision === "number" ? n.revision : null,
+    supersedes: string(n.supersedes) ? n.supersedes : null,
     advisor: displayName(n.advisor, "default"), severity: ["nit", "concern", "blocker"].includes(n.severity) ? n.severity : "nit",
     fingerprint: hash([n.advisor || "default", n.severity || "nit", n.note || ""]),
     contentHash: hash([n.severity || "nit", n.note || ""]),
@@ -82,6 +83,12 @@ export function resultFacts(details) {
 
 export function observeSemanticEntry(entry, event) {
   const message = entry.message || {};
+  if (message.role === "assistant" && (message.errorMessage || ["error", "aborted", "interrupted"].includes(message.stopReason))) {
+    const text = typeof message.errorMessage === "string" ? evidenceText(message.errorMessage) : null;
+    event.failure = { message: text?.slice(0, 4000) ?? null, truncated: (text?.length || 0) > 4000,
+      stopReason: typeof message.stopReason === "string" ? displayName(message.stopReason) : null,
+      source: "assistant.errorMessage/stopReason; credential-redacted untrusted diagnostic data" };
+  }
   if (entry.type === "session_init") {
     event.kind = "session-init";
     event.init = { role: string(entry.agent) ? displayName(entry.agent) : null, title: assignmentTitle(entry.task),
@@ -89,7 +96,10 @@ export function observeSemanticEntry(entry, event) {
       resolvedModel: string(entry.resolvedModel) ? displayName(entry.resolvedModel) : null,
       systemPromptHash: string(entry.systemPrompt) ? hash(entry.systemPrompt) : null, readOnly: typeof entry.readOnly === "boolean" ? entry.readOnly : null };
   }
-  if (event.kind === "user-task") event.taskTitle = string(message.title) ? displayName(message.title) : titleOf(visibleText(message.content));
+  if (event.kind === "user-task") {
+    event.taskTitle = string(message.title) ? displayName(message.title) : titleOf(visibleText(message.content));
+    event.taskHash = assignmentHash(visibleText(message.content));
+  }
   if (entry.type === "label") { event.kind = "label"; event.label = displayName(entry.label); event.targetId = entry.targetId || null; }
   if (["title_change", "title"].includes(entry.type)) { event.kind = "title-change"; event.title = displayName(entry.title); }
   if (entry.type === "model_usage") { event.purpose = displayName(entry.purpose, "unknown"); event.modelRole = string(entry.role) ? displayName(entry.role) : null; }
@@ -103,6 +113,7 @@ export function observeSemanticEntry(entry, event) {
   if (["toolResult", "tool_result"].includes(message.role)) {
     event.observations = resultFacts(message.details);
     if (message.toolName === "task") event.taskResults = taskResultFacts(message.details);
+    if (message.toolName === "eval") event.evalStatuses = evalStatusFacts(message.details);
   }
   if (event.kind === "compaction") {
     event.tokensAfter = typeof entry.tokensAfter === "number" ? entry.tokensAfter : null;
@@ -120,4 +131,22 @@ export function taskResultFacts(details) {
       title: string(r.assignment ?? r.task) ? assignmentTitle(r.assignment ?? r.task) : null,
       taskHash: string(r.assignment ?? r.task) ? assignmentHash(r.assignment ?? r.task) : null,
       source: "task-result-allocated-id" }));
+}
+
+/** OMP EvalToolDetails.statusEvents: no evaluation or parsing of arbitrary stdout. */
+export function evalStatusFacts(details) {
+  if (!details || typeof details !== "object") return [];
+  const statuses = Array.isArray(details.statusEvents) ? details.statusEvents :
+    (Array.isArray(details.cells) ? details.cells.flatMap(c => Array.isArray(c?.statusEvents) ? c.statusEvents : []) : []);
+  return statuses.filter(s => s && typeof s === "object" && ["workpool", "agent", "hub", "wait"].includes(s.op)).map(s => {
+    const out = { op: s.op, source: "eval-structured-status; not task completion or item ownership" };
+    for (const k of ["action", "pool", "id", "agent", "status"]) if (string(s[k])) out[k] = displayName(s[k]);
+    if (Number.isSafeInteger(s.count) && s.count >= 0) out.count = s.count;
+    return out;
+  });
+}
+/** Parse only the exact workpool opening tag generated in a child assignment. */
+export function workpoolIdentity(title) {
+  const m = /^<workpool pool="([^"\r\n]+)" batch="([^"\r\n]+)">$/.exec(String(title || ""));
+  return m ? { pool: m[1], batch: m[2], source: "workpool-assignment-tag" } : null;
 }

@@ -1,3 +1,4 @@
+import { sampleCalls, closeParentRefs, buildParentGraph } from "./evidence-package.js";
 const n = v => typeof v === "number" && Number.isFinite(v) ? v.toLocaleString("zh-CN", { maximumFractionDigits: 3 }) : "未记录";
 const money = v => typeof v === "number" && Number.isFinite(v) ? `$${v.toFixed(6)}` : "未记录";
 const cell = v => String(v ?? "未记录").replace(/[\r\n]/g, " ").replaceAll("|", "\\|");
@@ -19,6 +20,7 @@ function breakdown(row) {
 /** All aggregates use the full selection. Compact evidence sampling is explicit. */
 export function chineseReport(d, { full = false } = {}) {
   const t = d.total, m = d.measurement, l = d.ledger, r = d.telemetry, diagnostics = d.diagnostics;
+  const selected = full ? d.calls : sampleCalls(d.calls);
   const lines = ["# OMP 会话成本分析报告", "", `生成器：${d.generatedBy}；格式 ${d.schemaVersion}；检测规则 ${d.ruleVersion}。`,
     `生成时间：${d.generatedAt}；数据冻结时间：${d.snapshot?.frozenAt || "未记录"}。`,
     `会话名称：${d.sessionTitle || d.sessionId}；原始 ID：${d.sessionId}；根文件：${d.rootSessionFile || "未记录"}。`, "",
@@ -54,7 +56,8 @@ export function chineseReport(d, { full = false } = {}) {
     for (const x of l.roleModels) lines.push(`### ${x.name}`, summary(x), ...breakdown(x));
     lines.push("## agent 运行实例与委派关系", "");
     for (const x of l.instances) lines.push(`### ${x.name}`, summary(x), `实例 ID：${x.id}；角色：${x.role || "未记录"}；来源：${x.roleSource || "未记录"}。`,
-      `任务标题：${x.title || "未记录"}；任务归属：${x.taskName}；归因依据：${x.attribution}。`,
+      `初始任务标题：${x.initialTitle || x.title || "未记录"}；任务归属：${x.taskName}；归因依据：${x.attribution}。`,
+      ...(x.latestInstruction ? [`最新指令（不回填历史调用）：${x.latestInstruction}`, `指令变更证据：${JSON.stringify(x.instructionHistory || [])}`] : []),
       `父代理：${(x.actorType === "main" ? "无（根实例）" : x.parentAgent || "未记录")}；父工具调用：${x.parentToolCallId || "未记录"}；生命周期：${x.status || "未记录"}。`,
       `委派证据：${JSON.stringify(x.assignmentEvidence)}；初始化模型：${x.resolvedModel || "未记录"}；模型角色：${x.modelRole || "未记录"}。`,
       `任务分布：${JSON.stringify((x.taskAssignments || []).map(a => ({ id: a.id, name: a.name, calls: a.calls, tokens: a.measuredTokens, cost: a.costTotal })))}；父级来源：${x.parentSource || "未记录"}；委派匹配：${JSON.stringify(x.delegationMatches || [])}。`,
@@ -63,12 +66,15 @@ export function chineseReport(d, { full = false } = {}) {
   lines.push("## 历史配置、请求参数与价格来源", "", `历史思考设置覆盖 ${m.historicalThinkingRecords}/${m.usageRecords}；逐请求参数覆盖 ${m.requestEffortRecords}/${m.usageRecords}。当前设置不回填历史。`,
     `导出时上下文（不是历史证据）：${JSON.stringify(d.currentContext)}。`,
     `日志原价 ${money(m.historicalCost.knownSubtotal)}／${m.historicalCost.coveredRecords} 条；数据库价格 ${money(m.databaseCost.knownSubtotal)}／${m.databaseCost.coveredRecords} 条；采用价格 ${money(m.selectedCost.knownSubtotal)}／${m.selectedCost.coveredRecords} 条。`,
-    `价格差异 ${m.priceDifferences} 条；来源：${JSON.stringify(m.priceSources)}。`,
+    `价格差异 ${m.priceDifferences} 条；来源：${JSON.stringify(m.priceSources)}；交叉核验：${d.pricing.crossCheck || "未记录"}。`,
+    `历史有效费率分组（从已记录用量与金额反算，不是当前官方报价；定价档位条件未记录）：${JSON.stringify(d.pricing.effectiveRateGroups || [])}`,
     ...m.historicalSettings.map(s => `历史设置 ${s.value}：${s.calls} 条用量，事件 ${s.eventRef}，${s.timestamp || "时间未记录"}，来源 ${s.source}。`), "");
   if (r) {
     lines.push("## 请求、工具与等待时序", "", `运行时覆盖：${JSON.stringify(Object.fromEntries(Object.entries(r.coverage).filter(([k]) => k !== "collectors")))}。`,
-      "以下为各实例的观察范围，不是连续在线时间。注册了钩子不等于实际收到过请求事件；未采集原因不能仅凭零样本判定。",
-      ...table(["实例原名", "首次观察", "最后观察", "采集来源", "调用及缺口分类"], (r.coverage.collectors || []).map(c => [c.agent, when(c.firstObservedAt), when(c.lastObservedAt), c.sources.join(", ") || "无采集证据", JSON.stringify(c.reasons)])),
+      "以下为已记录实际活动边界，不是连续在线时间；健康状态导出不延长活动时间。注册钩子不等于实际收到事件。",
+      `辅助用量覆盖：${JSON.stringify(r.auxiliaryCoverage)}。`,
+      `未关联请求观察：${r.requestObservations?.filter(o => o.status !== "usage-linked").length || 0}。共享采集器不是请求所有者身份；这些观察不额外计入 LLM calls 或费用。`,
+      ...table(["实例原名", "首次活动", "最后活动", "采集来源", "调用及缺口分类"], (r.coverage.collectors || []).map(c => [c.agent, when(c.firstActivityAt), when(c.lastActivityAt), c.sources.join(", ") || "无采集证据", JSON.stringify(c.reasons)])),
       `请求到结束（毫秒）：${dist(r.requestDuration)}。`, `请求到首个输出（毫秒）：${dist(r.firstOutput)}。`, `请求到响应头（毫秒）：${dist(r.responseHeaders)}。`,
       "请求钩子观察的是该钩子的输入，之后其他扩展仍可能修改；时长包含网络、供应商与运行时开销，不是纯推理或排队时长。",
       ...table(["agent 原名", "进程运行 ID", "工具区间并集 ms", "分类（可能相互重叠）"], r.waits.map(x => [x.agent, x.runId, n(x.unionMs), JSON.stringify(x.categories)])),
@@ -86,7 +92,7 @@ export function chineseReport(d, { full = false } = {}) {
       ...r.compactions.map(x => JSON.stringify(x)), ...(r.compactions.length ? [] : ["当前范围未记录压缩事件。"]),
       ...r.helperUsage.map(x => `${x.name}：${summary(x)}。`), "",
       "## 配置版本证据", "", "磁盘文件内容变化、运行时系统提示观察、明确加载声明和请求关联分别记录。文件变更不等于加载，加载也不等于模型遵守。",
-      ...r.configuration.events.map(x => JSON.stringify(x)), ...r.configuration.explicitLoads.map(x => JSON.stringify(x)),
+      ...(r.configuration.definitions || []).map(x => JSON.stringify(x)), ...r.configuration.events.map(x => JSON.stringify(x)), ...r.configuration.explicitLoads.map(x => JSON.stringify(x)),
       ...r.configuration.requestGroups.map(x => `${x.name}：${summary(x)}。`), "");
   }
   if (d.comparison) {
@@ -100,7 +106,7 @@ export function chineseReport(d, { full = false } = {}) {
   const intervals = full ? diagnostics.incomingActivity : [...diagnostics.incomingActivity].sort((a, b) => (b.intervalMs ?? -1) - (a.intervalMs ?? -1)).slice(0, 12);
   lines.push("## 严格重复状态候选", "", `状态类调用 ${diagnostics.statusCallCount}；未知／混合工具路径 ${diagnostics.unknownToolCallCount}；严格候选 ${diagnostics.repeatedStatus.length}。`,
     "候选不是已确认浪费，金额不是保证可节省；零候选也不证明没有轮询问题。", ...repeated.map(x => JSON.stringify(x)),
-    `候选明细 ${repeated.length}/${diagnostics.repeatedStatus.length}，紧凑版按记录金额取最高项；全量 JSON／Markdown 不截断。`, "",
+    `候选明细 ${repeated.length}/${diagnostics.repeatedStatus.length}，紧凑版按候选记录金额选样；全量 JSON／Markdown 不截断。`, "",
     "## 消息到后续活动间隔", "", `全部 ${diagnostics.incomingActivity.length} 条；未闭合 ${diagnostics.incomingActivity.filter(x => x.nextCallRef === null).length}；毫秒分布 ${dist(diagnostics.incomingDistribution)}。`,
     "这是日志消息到下一条主控用量记录的间隔，不是请求耗时、裁决延迟或连续计费。", ...intervals.map(x => JSON.stringify(x)),
     `间隔明细 ${intervals.length}/${diagnostics.incomingActivity.length}，紧凑版按最长间隔选样；统计始终来自全量。`, "",
@@ -113,25 +119,47 @@ export function chineseReport(d, { full = false } = {}) {
   for (const e of d.events) if (important.has(e.kind) || e.delegations?.length || e.observations?.length) required.add(e.key);
   for (const x of [...repeated, ...intervals]) for (const ref of [x.callRef, x.precedingCallRef, x.eventRef, x.nextCallRef, ...(x.evidence || [])]) if (ref) required.add(ref);
   lines.push("## 自包含证据索引", "", "原始事件 ID、主体、任务、角色、父链和证据来源直接保留。以下为事实元数据，不是完整对话。",
-    ...d.events.filter(e => full || required.has(e.key) || required.has(e.ref)).map(e => JSON.stringify(e)), "",
-    full ? "## 完整调用清单" : "## 高金额调用证据", "");
-  const selected = full ? d.calls : [...d.calls].sort((a, b) => (b.price.adopted?.total || 0) - (a.price.adopted?.total || 0)).slice(0, 12);
+    ...(() => {
+      const seeds = new Set([...required, ...selected.flatMap(c => [c.ref, c.parentRef, c.taskSegmentRef, ...c.tools.map(t => t.resultRef), ...(c.assignmentEvidence || [])]).filter(Boolean)]);
+      const closure = closeParentRefs(d.events, full ? d.events.map(e => e.ref) : seeds).events;
+      const rich = full ? closure : closure.filter(e => seeds.has(e.ref) || seeds.has(e.key));
+      return [...rich.map(e => JSON.stringify(Object.fromEntries(Object.entries(e).filter(([, v]) => v !== null && (!Array.isArray(v) || v.length))))),
+        ...(full ? [] : [JSON.stringify(buildParentGraph(closure))])];
+    })(), "",
+    full ? "## 完整调用清单" : "## 分层调用证据", "");
   lines.push(...selected.map(c => JSON.stringify(c)), `调用明细 ${selected.length}/${d.calls.length}；金额排序不是问题排序。`, "");
   if (r) {
-    lines.push("## 运行时关联证据", "", ...r.reviews.map(x => JSON.stringify(x)));
-    const ids = new Set([...(r.coverage.collectors || []).flatMap(c => [...c.evidence, ...c.health.map(h => h.id)]), ...r.notes.flatMap(x => x.evidence), ...r.compactions.flatMap(x => x.evidence)]);
-    const selectedRequests = full ? r.requests : [...r.requests].sort((a, b) => (b.durationMs || 0) - (a.durationMs || 0)).slice(0, 12);
+    lines.push("## 运行时关联证据", "", ...(r.retryEvents || []).map(x => JSON.stringify(x)), ...r.reviews.map(x => JSON.stringify(x)));
+    const ids = new Set([...(l?.instances || []).flatMap(i => i.assignmentEvidence || []), ...selected.flatMap(c => c.assignmentEvidence || []), ...(r.coverage.collectors || []).flatMap(c => [...c.evidence, ...c.health.map(h => h.id)]), ...r.notes.flatMap(x => x.evidence), ...r.compactions.flatMap(x => x.evidence)]);
+    const callKeys = new Set(selected.map(c => c.key));
+    const selectedRequests = full ? r.requests : r.requests.filter(x => callKeys.has(x.callKey));
     const selectedSpans = full ? r.spans : [...r.spans].sort((a, b) => (b.durationMs ?? Infinity) - (a.durationMs ?? Infinity)).slice(0, 12);
-    for (const x of [...selectedRequests, ...selectedSpans]) for (const id of x.evidence) ids.add(id);
+    const unlinked = (r.requestObservations || []).filter(o => o.status !== "usage-linked");
+    const lanes = new Map();
+    for (const o of unlinked) { const k = JSON.stringify([o.collectorAgent, o.provider, o.model, o.ambiguous]); if (!lanes.has(k)) lanes.set(k, o); }
+    const selectedUnlinked = full ? unlinked : [...lanes.values()];
+    lines.push(...selectedUnlinked.map(x => JSON.stringify(x)), `未关联请求分层样本 ${selectedUnlinked.length}/${unlinked.length}；只代表采集观察，不额外加到用量账本。`);
+    for (const x of [...selectedRequests, ...selectedSpans, ...selectedUnlinked]) for (const id of x.evidence) ids.add(id);
     lines.push(...selectedRequests.map(x => JSON.stringify(x)), ...selectedSpans.map(x => JSON.stringify(x)),
       `请求明细 ${selectedRequests.length}/${r.requests.length}，区间明细 ${selectedSpans.length}/${r.spans.length}；完整模式保留全部。`,
-      ...r.evidence.filter(e => full || ids.has(e.id)).map(e => JSON.stringify(e)), "");
+      ...(() => {
+        const byId = new Map(r.evidence.map(e => [e.id, e]));
+        const queue = [...ids];
+        for (let i = 0; i < queue.length; i++) {
+          const e = byId.get(queue[i]);
+          for (const key of [e?.contextId, e?.messageStartId]) if (key && !ids.has(key)) { ids.add(key); queue.push(key); }
+        }
+        return r.evidence.filter(e => full || ids.has(e.id)).map(e => JSON.stringify(e));
+      })(), "");
   }
   lines.push("## 背景总账（不与选定金额相加）", "", ...d.backgroundContext.actors.map(a => `${a.actorType}：${n(a.calls)} 条，${n(a.measuredTokens)} Token，${money(a.knownCostSubtotal)} 已知小计。`), "",
-    "## 解释边界", "", "历史未记录的请求、处置、规则加载和压缩用量不能补造。所有诊断均不自动改变模型、Advisor、子代理、三审独立性、等待机制或验收标准。", "");
+    "## 解释边界", "", "历史未记录的请求、处置、规则加载和压缩用量不能补造。所有诊断均不自动改变模型、Advisor、子代理、既定独立审查、等待机制或验收标准。", "");
+  lines.push("## 全量可重放用量账本", "", "每条选定记录恰有一行；字典保留原始名称，null 表示未知，不按零价格补齐。可离线重算总额及主体、模型、任务分组。", JSON.stringify(d.replay), "",
+    "## 证据引用完整性", "", JSON.stringify(d.evidenceManifest), "", "## 源文件冻结清单", "", ...(d.snapshot?.files || []).map(f => JSON.stringify(f)), "");
   const q = d.dataQuality;
   lines.push("## 数据质量与报告完整性", "", "正文首尾有 OMP-COST-BEGIN / OMP-COST-END 标记、UTF-8 字节数与 SHA-256。缺少尾标记应先补齐报告；校验不通过则不要按完整报告分析。",
     q?.disclaimer || "传输完整不代表源数据完整。", `源覆盖：${q?.sourceCompleteness || "未记录"}；守恒检查 ${q?.conservation?.length || 0} 项，失败 ${q?.conservation?.filter(x => !x.ok).length || 0} 项。`,
+    `分析适用范围：${JSON.stringify(q?.fitness)}。这些维度不互相替代。`,
     ...table(["缺口", "数量", "解释"], (q?.issues || []).map(x => [x.code, x.count, x.detail])),
     ...(q?.conservation?.filter(x => !x.ok).map(x => JSON.stringify(x)) || []),
     `当前采集器状态：${JSON.stringify(d.observerStatus)}。`, "");

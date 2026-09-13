@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.9.0 - 2026-09-13
+
+### Fixed
+
+- Isolate bounded provider/model request lanes and native turn/compaction scopes; keep same-model collisions and unobserved auxiliary completions explicit. Do not use response headers as completion or side requests as primary prompt evidence.
+- Join observed nested dispatches through exact parent entries; recognize structured eval workpool push scope without guessed worker prefixes or elapsed-time ownership. Preserve initial assignments separately from later lifecycle instructions.
+- Export all normalized usage rows, compact complete ancestry, declared missing-source references, failure evidence and stratified call samples. Escape control bytes before sealing reports.
+- Separate real activity from observer-status timestamps, opaque eval interiors from observed native waits, and unknown compaction usage from explicit zero. Deduplicate configuration definitions while preserving observation identities.
+- Report note/card timing separately, retain explicit supersession only, and expose empirical rate groups without claiming official pricing or independent verification.
+
+### Added
+
+- Format v5 offline accounting replay and reference checks; full JSON cross-checks calls against replay. Legacy exports explicitly receive transport-only validation.
+- Six compatible regressions verified failing on 0.8.0, plus request/attribution/evidence/package coverage. CI verifies both example report formats and publishes the verified package with checksums.
+
+
 ## 0.8.0 - 2026-09-12
 
 - Replace narrow cost questions with comprehensive evidence-led analysis, including unanticipated issues and explicit uncertainty.

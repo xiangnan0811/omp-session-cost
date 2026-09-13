@@ -8,7 +8,7 @@ const COPY_OPTIONS = Object.freeze([
   { id: "selection", label: "当前主体", description: "当前主体的自包含分析报告" },
   { id: "tab", label: "当前标签页", description: "当前标签页，保留统计范围与指标定义" },
   { id: "markdown", label: "完整 Markdown 报告", description: "全部调用、事件与运行时证据，不静默截断" },
-  { id: "json", label: "完整 JSON", description: "格式 v4：完整事实、归因、历史、时序与证据" },
+  { id: "json", label: "完整 JSON", description: "格式 v5：完整事实、归因、历史、时序与证据" },
 ]);
 export function copyOptions() { return COPY_OPTIONS.map(option => ({ ...option })); }
 export function buildAiBrief(report, options = {}) { return diagnosticMarkdown(buildDiagnosticData(report, options), options); }

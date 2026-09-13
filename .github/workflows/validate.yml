@@ -20,6 +20,8 @@ jobs:
       - run: npm run check
       - run: node scripts/benchmark.mjs 20000
       - run: node scripts/example.mjs dist
+      - run: node scripts/verify-report.mjs dist/example-diagnostic.md
+      - run: node scripts/verify-report.mjs dist/example-diagnostic.json
       - run: npm pack --pack-destination dist
       - run: node scripts/verify-package.mjs "dist/omp-session-cost-$(node -p 'require("./package.json").version').tgz"
       - name: Archive validated source

@@ -1,4 +1,25 @@
-# 诊断格式 v4
+# 诊断格式 v5
+
+## 格式 v5：离线重放与可观察性边界（0.9.0）
+
+默认复制和完整导出均有 `omp-cost-replay`：`columns` 定义列顺序，`dictionaries` 保留原始主体／agent／角色／任务／模型名称，`rows` 包含本次选定的所有标准化用量记录，缺失数值是 `null`。`expected` 是总计及主体／模型／任务汇总，`manifestDigest` 校验调用 ref 集合。它是同一总账的重放表示，不是需要再次计费的新调用。
+
+紧凑报告的 `omp-cost-parent-graph` 用列式行保存每条必要父边：parent 为本表行号、根 `null` 或源快照缺失的外部 ref；file 引用 `files` 字典。重要事件另有丰富元数据。`omp-cost-evidence-manifest.unresolvedParents` 明确标注源快照内没有的父事件，不能用编造的事件填洞。必要历史父节点可越过当前筛选边界，但不加入选定用量。
+
+`node scripts/verify-report.mjs 文件` 在不访问原会话目录的情况下检查报告封装、逐行类型与非负用量、调用 ref 集合、分类汇总和父引用声明；完整 JSON 还重建账本交叉核对 `calls`。仅有合法校验和而没有格式 v5 账本会失败。历史 v4 缺账本报告明确返回 transport-only。所有验证均不等于上游源完整、供应商账单一致或工程交付通过。
+
+请求观察的主体是采集器所在实例，不自动等于每个辅助请求的真实执行者。按提供商／模型与原生回合／压缩边界消除可证实的串线；同作用域同模型无 ID 并发仍未知。不同模型 Advisor 请求能与主控隔离，但 Advisor 缺少自己的请求结束回调时，不把响应头或下一条主控消息伪造为其完成。未关联 starts 单列，不额外增加账单。运行时 sidecar schema 仍兼容 v1。
+
+工作池归属仅使用实际 `eval` 结构化 `statusEvents`（或 `cells[].statusEvents`）中的 push 和子代理初始化的 pool/batch。单个父任务范围可归属；同名池跨任务 push 无 item 级因果 ID 则保持 ambiguous-delegation。首次任务标题、后续明确 user-task 任务段、最新生命周期指令分列，后者不是已验收成果。普通 peer 消息不是自动的重派任务证明。
+
+配置定义按内容指纹去重，但观察事件的 ID、runId、时间不合并。请求中的明确系统提示／工具定义重新计算指纹，缺字段不使用当前磁盘快照回填。实际活动时间不包含 observer-status、配置快照等行政观察。封装 eval 时长只是外层区间，缺少内层实际起止时分类为 wrapped-tool-unobserved，不根据 300 秒推定 hub wait。
+
+`dataQuality.fitness` 分别表示普通用量、任务、请求时序、辅助用量、提示指纹与独立价格验证覆盖。压缩 ownUsageStatus、未归属请求、重试及失败信息都有来源；未知不是零。价格率是已记录类别金额除以相应类别 Token（含对应 orchestration），pricingRule 未记录就明确未知。Advisor notes 和 cards 分开统计，只有明确 supersedes 字段才是替代关系，不从文字冲突推定处置。
+
+报告正文控制字节以 `\uXXXX` 可见转义，之后才计算 UTF-8 字节长度及 SHA-256。原始名称照常保留，不匿名化。输出更完整也会比旧版仅选少量样本的报告更大；通过配置定义去重和列式父图减少无效重复，而不是截掉重放数据。
+
+实现对照 OMP 原生事件契约提交 `8fad7f10066247d394a962a32302d3d0b5e7efb9`：`extensions/types.ts`、`sdk.ts`、`eval/js/tool-bridge.ts`、`eval/workpool-bridge.ts` 和 `eval/types.ts`。合成回放测试不替代新版在真实 OMP 会话中的采集验收。
+
 
 ## 身份与统计口径
 
@@ -56,7 +77,7 @@ pi.events.emit("omp-session-cost:observation", {
 {"kind":"advisor-decision","noteId":"原始建议ID","status":"accepted","actionId":"SYS-09 修复"}
 ```
 
-关闭 blocker 必须再记录明确终态，例如 `resolved/closed/dismissed/rejected/obsolete/superseded`。字段没有证据时省略，不能填推测值。该协议不改变三审独立性、freeze、finding ledger、批量修复或验收规则。
+关闭 blocker 必须再记录明确终态，例如 `resolved/closed/dismissed/rejected/obsolete/superseded`。字段没有证据时省略，不能填推测值。该协议不改变独立审查独立性、freeze、finding ledger、批量修复或验收规则。
 
 ## 压缩、基线与缺失
 

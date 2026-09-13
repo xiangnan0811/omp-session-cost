@@ -6,7 +6,7 @@ const lf = s => String(s).replace(/\r\n/g, "\n");
 
 /** Hash the exact LF-normalized body, not an estimate of report completeness. */
 export function sealMarkdown(body) {
-  body = lf(body);
+  body = lf(body).replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, c => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
   const digest = sha(body), bytes = Buffer.byteLength(body, "utf8");
   return `<!-- OMP-COST-BEGIN v1 bytes=${bytes} sha256=${digest} -->\n${body}\n<!-- OMP-COST-END v1 sha256=${digest} -->\n`;
 }
@@ -44,7 +44,8 @@ export function collectionCoverage(calls, frames, requests) {
   const measured = new Set(requests.filter(r => r.durationMs !== null).map(r => r.callKey));
   return [...groups].map(([file, items]) => {
     const observations = frames.filter(f => f.sourceFile ? f.sourceFile === file : f.agent === items[0].agent);
-    const times = observations.map(f => f.timestamp).filter(Number.isFinite);
+    const times = observations.filter(f => f.kind !== "observer-status").map(f => f.timestamp).filter(Number.isFinite);
+    const activityTimes = observations.filter(f => !["observer-start", "observer-status", "configuration-files", "system-prompt-observed"].includes(f.kind)).map(f => f.timestamp).filter(Number.isFinite);
     const starts = observations.filter(f => f.kind === "observer-start");
     const firstObservedAt = times.length ? times.reduce((a, b) => Math.min(a, b), Infinity) : null;
     const lastObservedAt = times.length ? times.reduce((a, b) => Math.max(a, b), -Infinity) : null;
@@ -60,7 +61,7 @@ export function collectionCoverage(calls, frames, requests) {
       else categories.unlinkedOrIncomplete++;
     }
     return { instanceId: items[0].transcriptId, agent: items[0].agent, actorType: items[0].agentType, calls: items.length,
-      firstObservedAt, lastObservedAt, collectorStarts: starts.map(f => ({ id: f.id, runId: f.runId, timestamp: f.timestamp, source: f.observerSource, trigger: f.trigger || "not-recorded" })),
+      firstObservedAt, lastObservedAt, firstActivityAt: activityTimes.length ? activityTimes.reduce((a, b) => Math.min(a, b), Infinity) : null, lastActivityAt: activityTimes.length ? activityTimes.reduce((a, b) => Math.max(a, b), -Infinity) : null, collectorStarts: starts.map(f => ({ id: f.id, runId: f.runId, timestamp: f.timestamp, source: f.observerSource, trigger: f.trigger || "not-recorded" })),
       sources: [...new Set(observations.map(f => f.observerSource).filter(Boolean))],
       health: observations.filter(f => f.kind === "observer-status").map(f => ({ id: f.id, runId: f.runId, timestamp: f.timestamp, dropped: f.dropped ?? null, errors: f.errors || [], observedHooks: f.observedHooks || {} })),
       reasons: categories, evidence: starts.map(f => f.id),
@@ -83,6 +84,9 @@ export function qualityOf(report) {
   add("unattributed-calls", l?.reconciliation?.shared || 0, "按归因原因和主体检查，不把模糊候选自动视为跨任务共享。");
   add("unmeasured-request-timing", Math.max(0, (report.total?.calls || 0) - (r?.coverage?.measuredRequests || 0)), "查看每个实例的采集起点、观察来源和缺口原因；不以自然时间代替请求耗时。");
   add("advisor-disposition-unknown", r?.advisor?.dispositionUnknown ?? r?.advisor?.open ?? 0, "未记录处置，不等于忽略、未解决或采纳率为零。");
+  add("auxiliary-usage-unknown", r?.auxiliaryCoverage?.usageUnknown || 0, "压缩自身用量未记录；不等于零费用，也不据此断言供应商另行计费。普通回复计量完整不覆盖辅助请求。");
+  add("unlinked-provider-observations", r?.requestObservations?.filter(o => o.status !== "usage-linked").length || 0, "请求钩子可能包含共享主控采集器的侧通道；未关联的观察不是已经核实的额外计费调用。");
+  add("wrapped-tool-interior-unobserved", r?.spans?.filter(s => s.category === "wrapped-tool-unobserved").length || 0, "已观测 eval 外层时长，但无法完整分解内部等待；native-wait 为零不能证明没有等待。");
   add("collector-frame-errors", (r?.coverage?.invalidFrames || 0) + (r?.coverage?.unavailable || 0), "部分运行时证据无法读取或解析。");
   const health = r?.coverage?.collectors?.flatMap(c => c.health || []) || [];
   const unhealthyRuns = new Set(health.filter(h => h.dropped > 0 || h.errors?.length).map(h => h.runId));
@@ -101,6 +105,12 @@ export function qualityOf(report) {
   }
   add("conservation-failed", conservation.filter(c => !c.ok).length, "账本分组或导出总计不守恒；先解决数据一致性，不据此作优化判断。");
   return { sourceCompleteness: !report.snapshot ? "not-evaluated" : issues.some(x => /source|usage|price|identity/.test(x.code)) ? "limited" : "no-detected-source-gap",
+    fitness: { ordinaryUsageMissing: m.unmeteredResponses || 0, priceRecordsMissing: m.missingPriceRecords || 0,
+      taskAttribution: { selected: report.total?.calls || 0, linked: l?.coverage?.taskKnown || 0 },
+      requestTiming: { selected: report.total?.calls || 0, measured: r?.coverage?.measuredRequests || 0 },
+      auxiliaryUsage: r?.auxiliaryCoverage || { status: "not-evaluated" },
+      effectivePromptLinked: (report.calls || []).filter(c => c.promptHash).length,
+      independentPriceComparison: m.databaseCost?.coveredRecords ? "recorded-sources-available" : "not-available" },
     conservation, issues,
     disclaimer: "传输校验通过只证明报告正文完整，守恒通过只证明已读记录内部一致；两者都不能证明源日志、价格或归因完整。" };
 }

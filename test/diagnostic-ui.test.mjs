@@ -124,7 +124,7 @@ test("persistent baseline write failure does not claim success or replace an exi
 test("original names and schema 4 are present in the frozen copy preview", () => {
   const v = make(); v.openPreview("json");
   const d = JSON.parse(v.preview.payload);
-  assert.equal(d.schemaVersion, 4); assert.equal(d.sessionId, "fixture-session");
+  assert.equal(d.schemaVersion, 5); assert.equal(d.sessionId, "fixture-session");
   assert.equal(d.privacy.agentNames, "preserved");
   assert.ok(v.preview.payload.includes("Frontend"));
   assert.ok(!v.preview.payload.includes('"Agent-3"'));
