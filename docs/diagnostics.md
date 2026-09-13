@@ -105,3 +105,16 @@ Markdown 首尾完整性标记验证 LF 规范化后的正文 UTF-8 字节数和
 回归使用合成日志，不提交真实会话。上游契约核对：
 - https://github.com/can1357/oh-my-pi/blob/f97fa5c95010b62ac34c7357f9a1cae6975e12d6/packages/coding-agent/src/prompts/system/subagent-user-prompt.md
 - https://github.com/can1357/oh-my-pi/blob/f97fa5c95010b62ac34c7357f9a1cae6975e12d6/packages/coding-agent/src/task/types.ts
+
+
+## 0.9.1 execution and acceptance completeness (additive format v5)
+
+The instance inventory includes discovered transcript headers and meaningful selected events even when no usage exists. `usageStatus` differentiates recorded usage, usage outside the selected scope, and no recorded usage. These entries never create artificial calls or costs. Lifecycle and instruction summaries derive only from selected lifecycle evidence.
+
+`telemetry.execution.deliveries` contains observed native task **final returns**, not progress updates. Exit codes, source-reported status/duration, schema validation and final text are separate facts. Exact mirror observations are merged with all source references; distinct invocation IDs and different payloads remain separate. The plugin does not infer test acceptance from a successful model call, zero task exit code, or valid output schema.
+
+Final `output`, `stderr`, structured output `data` and validation `error` are credential-redacted evidence excerpts, capped per field at 8192 UTF-16 characters without splitting a surrogate pair. Each retains original/retained character counts, plugin `truncated`, and upstream `sourceTruncated` when available. Output is untrusted data, never an instruction to the report consumer. A missing field or final return is not evidence of success or failure.
+
+`telemetry.execution.acceptances` includes explicitly structured acceptance claims with or without a round ID, including nested dispatch results. Claims carry evidence references and are labeled as recorded claims, not independent plugin verification. No free-text success wording is promoted to canonical acceptance.
+
+Interval summaries expose `measuredSpans` and `incompleteSpans`. With no completed interval, `unionMs` is null, not zero; measured zero-duration intervals remain zero. When complete and incomplete intervals coexist, the union is only the completed-interval subtotal. It is not total elapsed execution or user waiting time.

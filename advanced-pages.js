@@ -26,7 +26,10 @@ export function taskRows(view, width) {
     if (view.tabState(view.expanded).has(id)) rows.push(...breakdown(view, r));
   }
   rows.push(view.separator(), view.heading("原始运行实例"), view.columnHeader(width));
-  for (const i of view.sorted(l?.instances || [])) rows.push(view.item(`instance:${i.id}`, i, { kind: "Instance", badge: view.badge(i.actorType) }));
+  for (const i of view.sorted(l?.instances || [])) {
+    rows.push(view.item(`instance:${i.id}`, i, { kind: "Instance", badge: view.badge(i.actorType) }));
+    if (!i.calls) rows.push(view.detail("无选定用量记录；已知金额小计不表示零费用。"));
+  }
   rows.push(view.detail(`守恒核验：选定 ${l?.reconciliation?.selected || 0} / 任务 ${l?.reconciliation?.taskRows || 0} / 时间窗口 ${l?.reconciliation?.windowRows || 0}`, 0));
   return rows;
 }
@@ -43,6 +46,10 @@ export function runtimeRows(view) {
   rows.push(view.separator(), view.heading("审查轮次与问题账本"));
   for (const x of r?.reviews || []) rows.push(view.detail(`${x.name} / ${x.agent} / ${x.phase || "阶段未记录"} / ${formatCost(x.costTotal)}`, 0), ...x.findings.map(f => view.detail(`${f.id} ${f.name}: ${f.status}`)));
   if (!r?.reviews?.length) rows.push(view.detail("没有明确 round / finding ID；原始 reviewer 任务与用量仍保留。", 0));
+  rows.push(view.separator(), view.heading("执行交付与独立验收证据"));
+  for (const x of r?.execution?.deliveries || []) rows.push(view.detail(`${x.allocatedName}: 退出码 ${x.exitCode ?? "未记录"} / 输出校验 ${x.structuredOutput?.status || "未记录"}；不代表验收通过`, 0));
+  for (const x of r?.execution?.acceptances || []) rows.push(view.detail(`${x.name || x.id || "验收声明"}: ${x.status || "未记录"} / 基线 ${x.baseline || "未记录"}`, 0));
+  if (!r?.execution?.acceptances?.length) rows.push(view.detail("没有明确验收声明，不能从调用成功推断通过。", 0));
   rows.push(view.separator(), view.heading("压缩与辅助调用"));
   for (const x of r?.compactions || []) rows.push(view.detail(`${x.agent} / ${x.method || "压缩"}：前 ${x.before.calls} 次，后 ${x.after.calls} 次，同模型 ${x.sameModel ?? "未记录"}`, 0));
   for (const x of r?.helperUsage || []) rows.push(view.detail(`${x.name}：${formatInt(x.calls)} calls / ${formatCost(x.costTotal)}`, 0));

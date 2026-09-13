@@ -341,6 +341,7 @@ export async function collectSessionData(sessionFile, pi, ctx, forceRefresh = fa
   const scan = attributeScan(attachRuntime({
     sessionTitle: events.findLast(e => e.agentType === "main" && e.kind === "title-change")?.title || rootHeader.title || null, runtimeEvents: telemetry.events, runtimeFiles: telemetry.files, runtimeCoverage: telemetry.coverage,
     rootSessionFile,
+    transcripts: valid.map(t => ({ id: t.header.id, file: t.file, ...t.identity })),
     sessionId: typeof rootHeader.id === "string" && rootHeader.id ? rootHeader.id : path.basename(transcriptStem(rootSessionFile)),
     calls: deduped.calls,
     events,

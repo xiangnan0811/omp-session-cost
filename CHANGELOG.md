@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.9.1 - 2026-09-13
+
+### Fixed
+
+- Retain header-only and unmetered agent instances without inventing usage; anchor observed child dispatches through parents with no usage records.
+- Scope lifecycle state and later instructions to the selected evidence, excluding future completion and cleanup metadata from historical reports.
+- Preserve native task final returns separately from progress, including exit code, schema validation, bounded credential-redacted output and explicit truncation metadata.
+- Include standalone acceptance claims without round IDs and nested dispatch observations; deduplicate exact mirror evidence without collapsing distinct invocations.
+- Distinguish unknown open-span duration from a measured zero; expose counts of measured and incomplete intervals.
+- Use exact task-result titles when session initialization has no assignment; keep all original agent names.
+
+### Validation
+
+- Add 18 regression/integration tests; the first ten were confirmed failing on unmodified 0.9.0 and passing with these repairs.
+- Keep format v5 and verify offline accounting/references, full JSON, package imports and synthetic large-session scans. No model, workflow or user configuration changes.
+
 ## 0.9.0 - 2026-09-13
 
 ### Fixed

@@ -37,11 +37,17 @@ export function attributeScan(scan) {
   for (const e of events) {
     if (!instances.has(e.transcriptId)) instances.set(e.transcriptId, { id: e.transcriptId, name: e.agent, actorType: e.agentType,
       role: e.agentType === "subagent" ? null : e.agentType, roleSource: e.agentType === "subagent" ? "not-recorded" : "actor-type", owner: e.ownerAgent,
-      title: null, initEventKey: null, parentToolCallId: null, parentAgent: null, assignmentEvidence: [] });
+      file: e.sessionFile ? path.resolve(e.sessionFile) : null, title: null, initEventKey: null, parentToolCallId: null, parentAgent: null, assignmentEvidence: [] });
     if (e.kind === "session-init") Object.assign(instances.get(e.transcriptId), e.init, { initEventKey: e.key, roleSource: e.init.role ? "session_init.agent" : "not-recorded" });
   }
+  for (const t of scan.transcripts || []) {
+    if (!t.id || instances.has(t.id)) continue;
+    instances.set(t.id, { id: t.id, name: t.agent, actorType: t.agentType, owner: t.ownerAgent,
+      role: t.agentType === "subagent" ? null : t.agentType, roleSource: "session-header-only",
+      file: path.resolve(t.file), title: null, initialTitle: null, parentAgent: null, assignmentEvidence: [] });
+  }
   for (const instance of instances.values()) instance.initialTitle = instance.title;
-  const byFile = new Map();
+  const byFile = new Map([...instances.values()].filter(i => i.file).map(i => [i.file, i]));
   for (const c of calls) if (instances.has(c.transcriptId)) {
     const instance = instances.get(c.transcriptId);
     instance.file = path.resolve(c.sessionFile); byFile.set(instance.file, instance);
@@ -168,6 +174,15 @@ export function attributeScan(scan) {
   }
   const enrichedCalls = calls.map(c => ({ ...c, ...fields(c) }));
   const enrichedEvents = events.map(e => ({ ...e, ...fields(e) }));
+  const sourceCounts = group(calls, c => c.transcriptId);
+  for (const instance of instances.values()) {
+    instance.sourceCallCount = sourceCounts.get(instance.id)?.length || 0;
+    const initial = enrichedEvents.find(e => e.transcriptId === instance.id && e.kind === "session-init");
+    if (initial) {
+      instance.taskKey = initial.taskKey; instance.taskName = initial.taskName; instance.attribution = initial.taskAttribution;
+      instance.assignmentEvidence = [...new Set([...instance.assignmentEvidence, ...initial.assignmentEvidence])];
+    }
+  }
   // Source references stay exact even when their display labels contain control bytes.
   return { ...scan, calls: enrichedCalls, events: enrichedEvents, instances: [...instances.values()], tasks: [...tasks.values()] };
 }
@@ -189,14 +204,30 @@ export function buildLedger(scan) {
   const instances = measuredGroups(calls, c => c.instanceId || c.transcriptId || c.agent, (c, id) => ({ ...metadata.get(id), id,
     name: c.instanceName || c.agent, agent: c.agent, taskName: c.taskName, taskKey: c.taskKey, attribution: c.taskAttribution, role: c.role,
     assignmentEvidence: c.assignmentEvidence || [] }));
+  const includedIds = new Set(instances.map(i => i.id));
+  const eventInstanceIds = new Set((scan.events || []).filter(e => !e.inherited).map(e => e.transcriptId));
+  for (const meta of metadata.values()) {
+    // An empty transcript is visible only in the unfiltered inventory. Time/model scopes must not import unrelated actors.
+    if (includedIds.has(meta.id) || (!eventInstanceIds.has(meta.id) && (scan.scope || (scan.events || []).some(e => e.transcriptId === meta.id)))) continue;
+    instances.push({ ...meta, id: meta.id, name: meta.runtimeName || meta.name, agent: meta.name, ...measure([]) });
+  }
   const instanceCalls = group(calls, c => c.instanceId || c.transcriptId || c.agent);
   for (const instance of instances) {
-    const items = instanceCalls.get(instance.id);
+    const items = instanceCalls.get(instance.id) || [];
+    instance.usageStatus = items.length ? "recorded" : instance.sourceCallCount > 0 ? "no-selected-usage" : "not-recorded";
+    instance.unmeteredResponses = (scan.events || []).filter(e => e.transcriptId === instance.id && e.kind === "assistant" && !e.usage?.carryingUsage).length;
+    // Only selected lifecycle observations may describe the current state of a historical slice.
+    const lifecycle = (scan.runtimeEvents || []).filter(f => f.kind === "subagent-lifecycle" && instance.file &&
+      (f.childFile || f.targetSessionFile) === instance.file).sort((a, b) => a.timestamp - b.timestamp);
+    instance.status = lifecycle.findLast(f => ["started", "completed", "failed", "aborted"].includes(f.status))?.status || null;
+    instance.instructionHistory = lifecycle.filter(f => f.title).map(f => ({ title: f.title, timestamp: f.timestamp, evidence: f.id, source: "lifecycle-description" }));
+    instance.latestInstruction = instance.instructionHistory.at(-1)?.title || null;
+    instance.lifecycleEvidence = lifecycle.map(f => f.id);
     instance.taskAssignments = measuredGroups(items, c => c.taskKey || SHARED_TASK, c => ({ name: c.taskName || "共享／未归属" }));
-    instance.taskKey = instance.taskAssignments.length === 1 ? instance.taskAssignments[0].id : null;
-    instance.taskName = instance.taskAssignments.length === 1 ? instance.taskAssignments[0].name : `跨 ${instance.taskAssignments.length} 个任务／归因桶`;
+    instance.taskKey = !items.length ? instance.taskKey || null : instance.taskAssignments.length === 1 ? instance.taskAssignments[0].id : null;
+    instance.taskName = !items.length ? instance.taskName || "未记录任务归属" : instance.taskAssignments.length === 1 ? instance.taskAssignments[0].name : `跨 ${instance.taskAssignments.length} 个任务／归因桶`;
     instance.attributionReasons = [...new Set(items.map(c => c.taskAttribution))];
-    instance.attribution = instance.attributionReasons.length === 1 ? instance.attributionReasons[0] : "multiple-attributions";
+    instance.attribution = !items.length ? instance.attribution || "source-not-recorded" : instance.attributionReasons.length === 1 ? instance.attributionReasons[0] : "multiple-attributions";
     instance.assignmentEvidence = [...new Set([...(metadata.get(instance.id)?.assignmentEvidence || []), ...items.flatMap(c => c.assignmentEvidence || [])])];
   }
   const bounds = contexts.filter(e => e.kind === "user-task" && e.agentType === "main" && e.timestamp).sort((a, b) => a.timestamp - b.timestamp || a.order - b.order);
