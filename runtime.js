@@ -6,6 +6,7 @@ import { performance } from "node:perf_hooks";
 import { hash, displayName, titleOf, assignmentTitle, assignmentHash, taskFacts, taskResultFacts, evalStatusFacts, noteFacts, resultFacts, workflowFact } from "./semantic.js";
 import { RequestTracker, requestModel, promptEvidence } from "./request-tracker.js";
 import { VERSION } from "./version.js";
+import { toolOperation } from "./tool-protocol.js";
 
 export const RUNTIME_SCHEMA = 1;
 export const sidecarPath = file => `${file}.cost-events.ndjson`;
@@ -182,7 +183,7 @@ export function createRuntimeObserver(pi, options = {}) {
       case "tool_call": {
         const args = event.input || event.args || {};
         record(s, "tool-dispatch", { toolCallId: text(event.toolCallId), name: text(event.toolName),
-          operation: text(args.op ?? args.action), timeoutMs: number(args.timeoutMs),
+          operation: text(toolOperation(event.toolName, args)), timeoutMs: number(args.timeoutMs),
           turnId: s.turnId || null, parentEntryId: s.turnParentEntryId || null,
           delegations: taskFacts(event.toolName, args, text(event.toolCallId)) });
         break;
@@ -192,7 +193,7 @@ export function createRuntimeObserver(pi, options = {}) {
           isError: Boolean(event.isError), taskResults: event.toolName === "task" ? taskResultFacts(event.details) : [],
           observations: resultFacts(event.details) }); break;
       case "tool_execution_start":
-        record(s, "tool-start", { toolCallId: text(event.toolCallId), name: text(event.toolName), operation: text(event.args?.op ?? event.args?.action),
+        record(s, "tool-start", { toolCallId: text(event.toolCallId), name: text(event.toolName), operation: text(toolOperation(event.toolName, event.args)),
           timeoutMs: number(event.args?.timeoutMs), turnId: s.turnId, parentEntryId: s.turnParentEntryId || null,
           delegations: taskFacts(event.toolName, event.args, text(event.toolCallId)),
           generatedNotes: event.toolName === "advise" ? noteFacts([{ ...event.args, advisor: event.args?.advisor || "default" }]) : [] }); break;

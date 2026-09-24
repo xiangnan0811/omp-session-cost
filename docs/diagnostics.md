@@ -1,5 +1,34 @@
 # 诊断格式 v5
 
+## OMP 18.3 协调工具兼容（0.9.2，规则 1.3.0）
+
+报告格式继续为 v5。`calls[].tools` 增加 `operation`、`target`、`recipient`、`broadcast`，状态操作增加 `targets`、`partial`；结果证据增加 `statusComparable`、`statusKind`。`emptyInbox` 仍只指旧接口可证实的空 inbox，不重新定义为“没有任务”。原始工具名／目标 ID 不匿名化。分类描述的是调用用途，不证明取消、消息投递或服务操作成功。
+
+| 调用 | 行为 / operation |
+| --- | --- |
+| `wait {}` | `status-only` / `wait` |
+| `read` 的 path 或纯 proc paths | `status-only` / `snapshot` |
+| `write agent://<id>` / `agent://all` | `message` / `send` 或 `broadcast` |
+| `write proc://<id>/kill` | `cancel` / `cancel` |
+| `write proc://<id>` | `service-input` / `stdin` |
+| `write proc://<id>/mode` | `service-control` / `mode` |
+
+普通文件 read/write 保持原分类。混合文件／proc 读取不是 status-only；未知、动态或歧义目标不推定为已验证的协调调用。静态 Eval 只识别小范围字面量语法，例如 `await tool.wait({})`、`display((await tool.wait()).text)` 和 `display(await tool.read({path:"proc://"}))`，不执行代码，也不把任意 JS/Python 归为状态检查。
+
+`repeated-status-v2` 要求同一代理相邻的已计费用量调用中，所有工具都只是已知状态检查、结果完整、状态指纹相同，且没有消息、用户输入、代理更新、压缩或其他工作等边界。新接口依据已核对的结构化结果判断：
+
+- 原生 wait 的空返回是 `details:{op:"wait",jobs:[]}` 加 `No running background jobs to wait for.`；兼容文档中的 `Nothing to wait for`，并保留非 job-backed agents 快照。running-only jobs 和明确 safety-cap 文本可以比较，但消息、任务完成／失败、服务完成、interrupted 与未知唤醒均不视为无进展返回。
+- proc 列表是 `details.proc:{jobs,agents,daemons}`；单项分别为 `{job,log}`、`{daemon,log,terminalRows?}` 或 `{agents}`。读取不消费结果，因此重复的已完成快照与 wait 交付完成结果不同。保留日志、状态、就绪信息和最终任务时长，只忽略 running job 的 `durationMs` 及代理快照的 `ageMs`；不删除任务输出内部同名字段。对象键顺序不是状态变化。
+- 未验证的结果、错误、截断、读取修饰参数以及多目标结果缺少完整对应关系时，不生成重复候选。Eval 外层输出不能证明所有内层调用均为空，因此新 Eval 包装只分类，不依据部分 stdout 生成重复候选。
+
+候选仅列出重复响应的历史／采用价格毛费用，不等于浪费，也不等于可直接节省的净费用；30 分钟 safety-cap 后再次阻塞和合理健康检查仍可能必要。
+
+运行时依据真实 `tool-start` / `tool-end` 区间计算 native-wait；兼容旧 sidecar 中 `name:"wait",operation:null`。没有结束事件的区间仍未知；没有采集到的旧时间不能补造。Eval 保持 `wrapped-tool-unobserved`，不从外层时长推算内层 native-wait，所以在覆盖缺失或仅有 Eval 包装时，native-wait 为零依然不能证明没有等待。
+
+**来源与验收边界。** 本版依据 OMP `v18.3.0` 的固定提交 `62bc57be1b03ef0802a33cf7f5f530e534527531` 核对 `packages/coding-agent/src/tools/wait.ts`、`async/job-control.ts`、`irc/messaging.ts`、`internal-urls/proc-protocol.ts`、`eval/workpool-bridge.ts`、`eval/handle-bridge.ts` 及 `packages/tui/src/tools/eval.ts`。其中 workpool bridge 仍发出 `op:"workpool"`，handle bridge 仍发出 `op:"agent"`；`semantic.js` 的历史 `hub/wait` 允许项继续保留，不把内层状态事件自动当成原生任务完成或等待计时。`irc:incoming` 和历史 `hub:incoming` 继续作为消息边界。
+
+`test/omp-18.3.test.mjs` 使用依源码构造的 JSONL 和 sidecar 夹具，覆盖等待结果、proc 快照、控制写入、旧接口、计时、名称和费用／Token 不变式。没有声称使用用户本机的真实 18.3 会话；这些测试也不替代真实 OMP 进程中的采集、服务和 TUI 端到端验收。
+
 ## 格式 v5：离线重放与可观察性边界（0.9.0）
 
 默认复制和完整导出均有 `omp-cost-replay`：`columns` 定义列顺序，`dictionaries` 保留原始主体／agent／角色／任务／模型名称，`rows` 包含本次选定的所有标准化用量记录，缺失数值是 `null`。`expected` 是总计及主体／模型／任务汇总，`manifestDigest` 校验调用 ref 集合。它是同一总账的重放表示，不是需要再次计费的新调用。

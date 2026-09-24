@@ -1,29 +1,28 @@
-# omp-session-cost 0.9.1
+# omp-session-cost 0.9.2
 
-本版在 0.9.0 基础上补齐执行交付和验收证据，保留格式 v5。没有修改用户模型、思考等级、审查规则或 Advisor 设置。
+## OMP 18.3 coordination protocol compatibility
 
-## 修复范围
+Native `wait {}` is now a status call and its observed runtime interval is `native-wait`. Existing v0.9.1 sidecars carrying `name: "wait"` with a null operation are reclassified on refresh; missing endpoints remain unknown.
 
-- 无用量代理和只有会话头的实例仍进入清单，明确区分未记录用量与已计量零值；无用量父代理不再阻断有证据的子任务关联。
-- 历史时间范围只使用当时选定的生命周期和追加指令，不借用后来的完成状态。
-- 原生任务最终结果与运行进度分开，保留退出码、格式验证状态、最终输出、错误文本及精确证据引用。
-- 输出字段按原有规则隐藏凭据，单字段上限 8192 个 UTF-16 字符；明确标记原始长度、插件截取和上游截取，不把部分文本伪装成完整交付。
-- 独立 acceptance 不再要求 roundId；嵌套调度返回中的结构化验收可见，相同调用的镜像观察去重并保留来源。
-- 只有起点的工具区间显示未知时长，不再显示 0；测得的零时长与未完成区间分别计数。
-- 初始化任务为空时，使用有明确关联的任务返回标题，不覆盖原始 agent 名称。
+`read proc://` and `read proc://<id>` are recognized as status checks. Direct and broadcast peer messages (`write agent://<id>` / `agent://all`), cancellation (`write proc://<id>/kill`), service stdin and `/mode` are no longer classified as filesystem writes. Original target and agent names are preserved.
 
-## 验证与边界
+## Evidence-based repeated-status candidates
 
-新增 18 项回归及集成测试，其中首批 10 项在未修改的 0.9.0 上全部失败、修复后全部通过。发布前执行全量 Node 测试、Bun SQLite／插件注册检查、20,000 调用合成扫描、Markdown／JSON 离线重放和发布包隔离导入。
+`repeated-status-v2` validates the actual wait/proc result shapes and compares stable state. It excludes message delivery, completed/failed task results returned by wait, steering interrupts, service-completion wakes, errors, truncated results and unknown shapes. Running-job elapsed time and agent age are ignored; logs, readiness, terminal durations and task output remain significant.
 
-模型调用成功、任务退出成功、格式有效与工程验收通过分别展示。验收是来源中明确记录的声明，不是插件独立验证。未知不会被转换为通过或失败。
+Literal Eval wrappers are classified without executing transcript code. Neither selected printed output nor an outer Eval duration proves what happened inside. Partial/batch proc results without a verified complete mapping are classified but do not produce repeat candidates. A candidate is not proof that a health check or long blocking wait was unnecessary, and its gross response cost is not guaranteed net savings.
 
-没有用户原始会话日志，不能将合成测试称为该历史会话的重放验收；旧日志从未记录的时间与用量无法补造。已记录的任务返回可重新解析，新运行时观察从新版加载后开始。
+## Compatibility and verification
 
-## 升级
+- Historical `hub/irc/job` calls and both `irc:incoming` / `hub:incoming` events remain supported. Ordinary file IO, task attribution and usage aggregation are unchanged.
+- Diagnostic format remains v5; rule version is 1.3.0. New protocol fields are additive. The package remains dependency-free.
+- 44 added regressions use constructed JSONL/sidecar fixtures whose output contracts were checked against OMP `v18.3.0`, commit `62bc57be1b03ef0802a33cf7f5f530e534527531`. They are not captured user sessions and do not constitute a live OMP/TUI end-to-end acceptance test.
+- The release workflow runs the full Node suite, Bun SQLite/registration checks, a 20,000-call synthetic scan, offline Markdown/JSON verification and an isolated package import before publication.
+
+## 安装或升级
 
 ```sh
-omp plugin install "github:xiangnan0811/omp-session-cost#v0.9.1"
+omp plugin install "github:xiangnan0811/omp-session-cost#v0.9.2"
 ```
 
-重启需要新版采集器的 OMP 进程，通过 `/cost` 确认版本。正常 GitHub 插件渠道升级，不需要手工替换文件。公开示例与测试均为合成数据，不包含用户会话。
+重启需要使用新版的 OMP 进程，执行 `/cost` 核对版本并刷新报告。无需修改 OMP 配置，也不需要手工覆盖 node_modules。

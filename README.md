@@ -5,6 +5,16 @@
 **原始名称直接保留。** Agent、角色、任务、阶段、模型、会话和证据文件名称不会被替换为 `Agent-N`。费用是 **API 等价估算**，不是订阅扣款、剩余额度或供应商对账结果。
 
 
+## 0.9.2：OMP 18.3 协调接口兼容
+
+识别原生 `wait {}` 与 `read proc://` 状态检查。`write agent://<id>`／`agent://all` 分别记录定向消息／广播；`write proc://<id>/kill`、服务 stdin 与 `/mode` 不再算作文件修改。普通文件读写和历史 `hub/irc/job` 会话保持兼容。
+
+原生 `wait` 的已观察工具区间归入 `native-wait`，包括旧版 sidecar 中工具名为 `wait`、但 operation 缺失的记录。缺失起止的历史时间不能补造；Eval 的外层区间也不冒充内层等待。
+
+`repeated-status-v2` 比较已验证结构的状态快照，忽略正在运行的任务耗时／代理年龄，但保留输出、日志、终态时长与实际状态变化。消息、完成结果、打断、错误、截断以及无法验证的结果不推测为空等待。部分／批量 proc 读取和 Eval 内部结果缺乏完整对应证据时只分类，不产生重复候选。候选不等于无效等待或可直接节省的费用，正常长等待和健康检查仍可能有用。
+
+格式继续为 v5，诊断规则版本为 1.3.0。测试夹具依据上游 18.3.0 固定提交的源码构造，并非用户真实会话录制；完整契约与验证边界见 [诊断文档](docs/diagnostics.md)。
+
 ## 0.9.1：执行交付、独立验收与缺失用量
 
 没有用量记录的代理不再从实例清单中消失；有明确父委派证据的无用量父代理也能建立下属关系。`0 条用量`只表示没有可计入的用量记录，不表示免费、没有运行或验收通过。
@@ -30,10 +40,10 @@ npm run verify:report -- /path/to/report.md
 
 覆盖缺口分别展示：普通用量、任务归属、请求时长、压缩自身用量、提示版本和价格交叉验证。未匹配的请求观察不混入调用／成本总计。封装 `eval` 的内部等待缺少实际区间时标为不可见，不能因为时长接近 300 秒就认定是等待。Advisor 按建议和卡片分别统计，只有明确 `supersedes` 才记录替代关系，不推断采纳或修复完成。
 
-## 安装或升级到 0.9.1
+## 安装或升级到 0.9.2
 
 ```sh
-omp plugin install "github:xiangnan0811/omp-session-cost#v0.9.1"
+omp plugin install "github:xiangnan0811/omp-session-cost#v0.9.2"
 ```
 
 安装后重启 OMP，使观察器在该进程中加载；执行 `/cost` 可核对版本。已经运行的其他 OMP 进程也需要分别重新加载插件，不能假定它们自动切换。
@@ -116,7 +126,7 @@ node scripts/example.mjs dist
 node scripts/verify-report.mjs dist/example-diagnostic.md
 node scripts/verify-report.mjs dist/example-diagnostic.json
 npm pack --pack-destination dist
-node scripts/verify-package.mjs dist/omp-session-cost-0.9.1.tgz
+node scripts/verify-package.mjs dist/omp-session-cost-0.9.2.tgz
 ```
 
 打包先经过隔离导入、注册及离线验证器检查，再作为 GitHub Release 附件保留；正常升级仍使用上述插件渠道。CI 还在 Bun 下检查只读 SQLite、旧数据库结构兼容和扩展注册。测试、公开示例及基准全部使用合成数据，发布不包含用户会话。
