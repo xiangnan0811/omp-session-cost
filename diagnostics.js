@@ -3,12 +3,12 @@ import { parseTime } from "./transcript.js";
 import { displayName, taskFacts, observeSemanticEntry, resultFacts } from "./semantic.js";
 import { noteFacts } from "./semantic.js";
 import { RULE_VERSION } from "./version.js";
+import { protocolToolFacts, coordinationStatusEvidence, incompleteStatusResult } from "./tool-protocol.js";
 
 export const numberOrNull = value => typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
 export const digest = value => createHash("sha256").update(typeof value === "string" ? value : JSON.stringify(value)).digest("hex");
 const has = (object, key) => Object.prototype.hasOwnProperty.call(object || {}, key);
 const LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max", "auto"]);
-const KNOWN_TOOLS = new Set(["hub", "irc", "job", "eval", "bash", "read", "grep", "glob", "write", "edit", "task", "todo", "advise"]);
 
 export function cleanText(value, limit = 800) {
   return String(value ?? "").replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\|$)/g, "").replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
@@ -82,7 +82,7 @@ function literalObject(source) {
       .replace(/([{,]\s*)([A-Za-z]\w*)\s*:/g, '$1"$2":').replace(/,\s*([}\]])/g, "$1");
     const object = JSON.parse(json);
     if (!object || Array.isArray(object)) return null;
-    const allowed = new Set(["op", "action", "ids", "timeoutMs", "peek"]);
+    const allowed = new Set(["op", "action", "ids", "timeoutMs", "peek", "path", "paths"]);
     if (Object.keys(object).some(key => !allowed.has(key))) return null;
     if (object.ids !== undefined && (!Array.isArray(object.ids) || object.ids.some(id => typeof id !== "string"))) return null;
     if (object.timeoutMs !== undefined && numberOrNull(object.timeoutMs) === null) return null;
@@ -91,6 +91,8 @@ function literalObject(source) {
 }
 
 function nativeStatus(name, args) {
+  const modern = protocolToolFacts(name, args);
+  if (modern?.behavior === "status-only") return modern.statusOps[0];
   const op = args?.op ?? args?.action;
   if (!["hub", "irc", "job"].includes(name) || !["inbox", "list", "jobs", "wait"].includes(op)) return null;
   if (!args || typeof args !== "object" || Array.isArray(args) || args.name || args.from || args.to) return null;
@@ -102,6 +104,8 @@ function nativeStatus(name, args) {
 }
 
 export function classifyTool(name, args = {}) {
+  const modern = protocolToolFacts(name, args);
+  if (modern) return modern;
   args = args && typeof args === "object" && !Array.isArray(args) ? args : {};
   const direct = nativeStatus(name, args);
   if (direct) return { behavior: "status-only", statusOps: [direct] };
@@ -113,12 +117,15 @@ export function classifyTool(name, args = {}) {
   code = code.replace(/await\s+asyncio\.sleep\(\s*\d+(?:\.\d+)?\s*\)\s*;?/g, "")
     .replace(/await\s+Bun\.sleep\(\s*\d+\s*\)\s*;?/g, "")
     .replace(/await\s+new\s+Promise\(\s*(\w+)\s*=>\s*setTimeout\(\s*\1\s*,\s*\d+\s*\)\s*\)\s*;?/g, "");
-  const pattern = /(?:display|print)\(\s*\(?\s*await\s+tool\.(hub|irc|job)\(\s*(\{[^{}]*\})\s*\)\s*\)?\s*(?:\.text)?\s*\)\s*;?/g;
+  const pattern = /(?:display|print)\(\s*\(?\s*await\s+tool\.(hub|irc|job|wait|read)\(\s*(\{[^{}]*\})?\s*\)\s*\)?\s*(?:\.text)?\s*\)\s*;?/g;
   code = code.replace(pattern, (_all, tool, raw) => {
-    const parsed = literalObject(raw);
+    const parsed = literalObject(raw || "{}");
     const op = parsed && nativeStatus(tool, parsed);
     if (op) { ops.push(op); return ""; }
     return "UNRECOGNIZED";
+  });
+  code = code.replace(/await\s+tool\.wait\(\s*(\{\s*\})?\s*\)\s*;?/g, () => {
+    ops.push(nativeStatus("wait", {})); return "";
   });
   if (!code.trim() && ops.length) return { behavior: "status-only", statusOps: ops, staticRecognition: "known literal eval grammar" };
   return { behavior: "mixed/unknown", statusOps: [] };
@@ -132,7 +139,7 @@ function stableStatus(value) {
   return value;
 }
 
-function resultEvidence(message) {
+function resultEvidence(message, tool) {
   const details = message?.details;
   const text = textContent(message?.content, 65536);
   const completeText = typeof message?.content === "string" ? message.content.length <= 65536 :
@@ -141,10 +148,12 @@ function resultEvidence(message) {
     (Array.isArray(details?.inbox) && details.inbox.length === 0);
   const hasMessages = (Array.isArray(details?.inbox) && details.inbox.length > 0) || Boolean(details?.from || details?.waited?.message);
   const normalized = text.replace(/\bheartbeat(?: age)?\s*[:=]\s*\d+(?:\.\d+)?\s*(?:ms|s|seconds?|minutes?|m)\b/gi, "heartbeat age=[ignored]").trim();
+  const status = coordinationStatusEvidence(tool, details, text);
   return {
-    complete: Boolean(completeText) && !message?.isError && !details?.isError && !details?.meta?.truncated && !details?.truncated,
+    complete: Boolean(completeText) && !message?.isError && !incompleteStatusResult(details),
+    statusComparable: status?.statusComparable ?? null, statusKind: status?.statusKind ?? "legacy-or-unclassified",
     emptyInbox: hasEmptyInbox && !hasMessages,
-    statusFingerprint: digest([normalized, stableStatus(details || {})]),
+    statusFingerprint: digest(status?.fingerprintValue ?? [normalized, stableStatus(details || {})]),
     excerpt: cleanText(text, 320),
     outcome: message?.isError || details?.isError ? "error" : "returned",
   };
@@ -224,7 +233,7 @@ export function createDiagnosticIndexer() {
           const args = rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs) ? rawArgs : {};
           const rawId = block.id ?? block.toolCallId;
           const id = typeof rawId === "string" ? rawId : null;
-          const tool = { id, name: displayName(name), delegations: taskFacts(name, args, id), ...classifyTool(name, args), result: null, startedAt: null,
+          const tool = { id, name: displayName(name), delegations: taskFacts(name, args, id), ...classifyTool(name, rawArgs ?? {}), result: null, startedAt: null,
             severity: ["nit", "concern", "blocker"].includes(args?.severity) ? args.severity : "unspecified" };
           if (name === "advise" && typeof args.note === "string") tool.generatedNotes = noteFacts([{ ...args, advisor: args.advisor || "default" }]);
           event.tools.push(tool);
@@ -240,7 +249,7 @@ export function createDiagnosticIndexer() {
         const tool = resultToolId ? pendingTools.get(`${fileId}\u0000${resultToolId}`) : null;
         event.toolCallId = resultToolId;
         event.toolName = displayName(message.toolName);
-        const result = resultEvidence(message);
+        const result = resultEvidence(message, tool);
         event.outcome = result.outcome; event.privateExcerpt = result.excerpt;
         if (tool) {
           tool.result = { ...result, eventKey: key, timestamp, observations: resultFacts(message.details) };
@@ -374,7 +383,8 @@ export function analyzeEvents(calls, events, contextEvents = events) {
   const shape = call => {
     if (call.behavior !== "status-only" || !call.toolFacts?.length) return null;
     if (!call.toolFacts.every(t => t.result?.complete)) return null;
-    if (!call.toolFacts.some(t => t.result.emptyInbox)) return null;
+    if (call.toolFacts.some(t => t.result.statusComparable === false)) return null;
+    if (!call.toolFacts.some(t => t.result.statusComparable === true || t.result.emptyInbox)) return null;
     return digest(call.toolFacts.map(t => [t.statusOps, t.result.statusFingerprint]));
   };
   for (const group of byAgent.values()) {
@@ -385,12 +395,12 @@ export function analyzeEvents(calls, events, contextEvents = events) {
       const barrierIndex = previous ? upperBound(boundaryOrders, previous.call.sequence) : boundaryOrders.length;
       const barrier = previous && boundaryOrders[barrierIndex] < call.sequence;
       if (current && previous?.shape === current && !barrier && (call.previousAssistantKey === undefined || call.previousAssistantKey === previous.call.recordKey) && previous.call.provider === call.provider && previous.call.model === call.model) {
-        repeated.push({ rule: "repeated-status-v1", ruleVersion: RULE_VERSION, kind: "candidate", callKey: call.recordKey,
+        repeated.push({ rule: "repeated-status-v2", ruleVersion: RULE_VERSION, kind: "candidate", callKey: call.recordKey,
           precedingCallKey: previous.call.recordKey, recordSet: [call.recordKey], overlapGroup: "status-calls",
           timestamp: call.timestamp, historicalGrossCost: call.transcriptCost?.total ?? null,
           adoptedGrossCost: call.priceStatus === "missing" ? null : call.selectedCost?.total ?? call.cost?.total ?? null,
           evidence: call.toolFacts.map(t => t.result.eventKey),
-          caveat: "Same known read-only status path, empty inbox and unchanged result; health checks can still be useful. Not guaranteed net savings." });
+          caveat: "Same known status path and unchanged comparable snapshot, with no delivered message/completion or intervening activity; elapsed snapshot age is ignored. Health checks and long blocking waits can still be useful. Not guaranteed net savings." });
       }
       previous = current ? { call, shape: current } : null;
     }

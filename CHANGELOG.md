@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.2 - 2026-09-24
+
+- Support OMP 18.3 native `wait {}` and `read proc://` status calls while retaining historical `hub`, `irc`, and `job` classification and peer-event compatibility.
+- Classify `write agent://<id>` / `agent://all` as direct / broadcast messaging, `write proc://<id>/kill` as cancellation, and service stdin / `/mode` as service input / control rather than file writes. Preserve target names in diagnostic exports.
+- Normalize native wait operations in passive runtime hooks and recover `native-wait` categorization for existing sidecars with null operations. Preserve missing interval endpoints as unknown and Eval outer spans as `wrapped-tool-unobserved`.
+- Introduce `repeated-status-v2` (rules 1.3.0): validate structured wait/proc result variants, distinguish no-work and safety-cap snapshots from message, completion, service-exit and interruption wakes, and compare unchanged state without running-job duration / agent-age noise. Preserve logs, lifecycle, terminal durations and nested result data. Candidates remain observations, not guaranteed waste or savings.
+- Add safe literal Eval wait/proc recognition, reject dynamic code and ambiguous/mixed calls, keep unverifiable inner results and partial/batch proc outputs out of repeat detection, and remove the unused tool-name constant.
+- Add 44 source-checked constructed-fixture regressions for new protocols, timing, compatibility, negative cases, exports and unchanged usage totals. No real user transcripts or OMP configuration changes are included. Format v5 is retained with additive protocol fields.
+
 ## 0.9.1 - 2026-09-13
 
 ### Fixed

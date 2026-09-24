@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isNativeWait } from "./tool-protocol.js";
 import { buildExecutionEvidence } from "./outcomes.js";
 import { collectionCoverage } from "./report-contract.js";
 import { distribution } from "./diagnostics.js";
@@ -114,8 +115,8 @@ export function buildTelemetry(scan) {
   let spans = [...uniqueStarts.values()].filter(Boolean).map(start => {
     const end = spanEnds.get(`${key(start, start.toolCallId)}\u0000${start.kind === "tool-start" ? "tool-end" : "approval-end"}`);
     return { id: start.id, agent: start.agent, sourceFile: start.sourceFile, runId: start.runId, toolCallId: start.toolCallId, name: start.name,
-      category: start.kind === "approval-start" ? "approval-wait" : ["hub", "irc", "job"].includes(start.name) && start.operation === "wait" ? "native-wait" : start.name === "eval" ? "wrapped-tool-unobserved" : "tool-execution",
-      operation: start.operation || null, startAt: start.timestamp, endAt: end?.timestamp || null, durationMs: elapsed(start, end),
+      category: start.kind === "approval-start" ? "approval-wait" : isNativeWait(start.name, start.operation) ? "native-wait" : start.name === "eval" ? "wrapped-tool-unobserved" : "tool-execution",
+      operation: isNativeWait(start.name, start.operation) ? "wait" : start.operation || null, startAt: start.timestamp, endAt: end?.timestamp || null, durationMs: elapsed(start, end),
       monotonicStart: start.monotonicMs, monotonicEnd: end?.monotonicMs ?? null, observerSource: start.observerSource,
       evidence: [start.id, end?.id].filter(Boolean), missingReason: !end ? "end-event-not-recorded" : elapsed(start, end) === null ? "invalid-clock-span" : null,
       startOutsideRange: !selectedFrames.has(start.id), endOutsideRange: end ? !selectedFrames.has(end.id) : null };

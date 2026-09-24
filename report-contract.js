@@ -86,7 +86,7 @@ export function qualityOf(report) {
   add("advisor-disposition-unknown", r?.advisor?.dispositionUnknown ?? r?.advisor?.open ?? 0, "未记录处置，不等于忽略、未解决或采纳率为零。");
   add("auxiliary-usage-unknown", r?.auxiliaryCoverage?.usageUnknown || 0, "压缩自身用量未记录；不等于零费用，也不据此断言供应商另行计费。普通回复计量完整不覆盖辅助请求。");
   add("unlinked-provider-observations", r?.requestObservations?.filter(o => o.status !== "usage-linked").length || 0, "请求钩子可能包含共享主控采集器的侧通道；未关联的观察不是已经核实的额外计费调用。");
-  add("wrapped-tool-interior-unobserved", r?.spans?.filter(s => s.category === "wrapped-tool-unobserved").length || 0, "已观测 eval 外层时长，但无法完整分解内部等待；native-wait 为零不能证明没有等待。");
+  add("wrapped-tool-interior-unobserved", r?.spans?.filter(s => s.category === "wrapped-tool-unobserved").length || 0, "已观测 eval 外层时长，但缺少内层起止事件，不能拆分或归入 native-wait。原生 wait 和旧 hub/irc/job wait 已支持；缺少内层事件或采集覆盖时，native-wait 为零仍不能证明没有等待。");
   add("instances-without-usage", l?.instances?.filter(i => i.usageStatus === "not-recorded").length || 0, "实例有已记录证据但没有用量；保留原名，不显示为免费，也不补造调用。");
   add("task-result-text-truncated", r?.execution?.coverage?.truncatedOutput || 0, "任务最终结果文本存在字段截取或上游截取；不等于整个导出文件被截断。");
   add("collector-frame-errors", (r?.coverage?.invalidFrames || 0) + (r?.coverage?.unavailable || 0), "部分运行时证据无法读取或解析。");
